@@ -393,6 +393,21 @@ class DetailsBlockTests(SimpleTestCase):
         self.assertIn("Later <strong>bold</strong>.", html)
         self.assertEqual(html.count("<details>"), html.count("</details>"))
 
+    def test_latex_inside_doubly_nested_dropdowns_is_restored(self):
+        text = (
+            "Top $a$.\n\n<details>\n<summary>L1</summary>\n\nOne $a$.\n\n"
+            "<details>\n<summary>L2</summary>\n\nTwo $$b$$\n\n"
+            "<details>\n<summary>L3</summary>\n\nThree $x_{<t}$ **bold**.\n</details>\n</details>\n</details>\n"
+        )
+        html = views._render_markdown(text)
+        self.assertEqual(html.count("$a$"), 2)
+        self.assertIn("$$b$$", html)
+        self.assertIn("$x_{&lt;t}$ <strong>bold</strong>", html)
+        self.assertEqual(html.count("<details>"), 3)
+        self.assertEqual(html.count("</details>"), 3)
+        self.assertNotRegex(html, "DETAILSBLOCK|LATEX(INLINE|DISPLAY)")
+
+
 class LocalArenaReadTests(SimpleTestCase):
     def test_reads_from_a_local_checkout_but_not_outside_it(self):
         with tempfile.TemporaryDirectory() as tmp:
