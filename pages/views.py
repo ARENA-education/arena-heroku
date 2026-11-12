@@ -558,6 +558,11 @@ SPLIT_SECTION_REDIRECTS = {
         "2-gans": "52_gans/1-gans",
         "3-bonus-transposed-convolutions": "51_vaes/bonus-transposed-convolutions",
     },
+    # 2.2 was one merged page from 2026-02-23 to 2026-09-01
+    ("chapter2_rl", "02_dqn_vpg"): {
+        "1-deep-q-learning": "21_dqn/1-q-network-replay-buffer",
+        "2-vpg": "22_vpg/1-policy-gradient-theorem",
+    },
 }
 
 
