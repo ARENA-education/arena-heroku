@@ -349,3 +349,21 @@ class LatexEscapingTests(SimpleTestCase):
     def test_alignment_ampersands_are_escaped(self):
         html = views._render_markdown("$$\n\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}\n$$\n")
         self.assertIn("a &amp;= b", html)
+
+
+class SplitSectionRedirectTests(SimpleTestCase):
+    def test_old_subsection_urls_go_to_the_child_section(self):
+        response = self.client.get("/chapter0_fundamentals/05_vaes_gans/2-gans/")
+        self.assertEqual(response.status_code, 301)
+        self.assertEqual(response["Location"], "/chapter0_fundamentals/52_gans/1-gans/")
+
+    def test_unknown_subsection_goes_to_the_group_landing_page(self):
+        response = self.client.get("/chapter0_fundamentals/05_vaes_gans/intro/")
+        self.assertEqual(response.status_code, 301)
+        self.assertEqual(response["Location"], "/chapter0_fundamentals/05_vaes_gans/")
+
+    def test_old_merged_2_2_subsection_urls_go_to_dqn_and_vpg(self):
+        response = self.client.get("/chapter2_rl/02_dqn_vpg/1-deep-q-learning/")
+        self.assertEqual(response["Location"], "/chapter2_rl/21_dqn/1-q-network-replay-buffer/")
+        response = self.client.get("/chapter2_rl/02_dqn_vpg/2-vpg/")
+        self.assertEqual(response["Location"], "/chapter2_rl/22_vpg/1-policy-gradient-theorem/")
