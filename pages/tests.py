@@ -1,4 +1,6 @@
 import json
+import tempfile
+from pathlib import Path
 from unittest import mock
 
 from django.http import Http404
@@ -367,3 +369,16 @@ class SplitSectionRedirectTests(SimpleTestCase):
         self.assertEqual(response["Location"], "/chapter2_rl/21_dqn/1-q-network-replay-buffer/")
         response = self.client.get("/chapter2_rl/02_dqn_vpg/2-vpg/")
         self.assertEqual(response["Location"], "/chapter2_rl/22_vpg/1-policy-gradient-theorem/")
+
+
+class LocalArenaReadTests(SimpleTestCase):
+    def test_reads_from_a_local_checkout_but_not_outside_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "materials"
+            (root / "ch0").mkdir(parents=True)
+            (root / "ch0" / "page.md").write_text("# Local page", encoding="utf-8")
+            (Path(tmp) / "secret.txt").write_text("secret", encoding="utf-8")
+            with mock.patch.object(views, "LOCAL_ARENA_PATHS", [root]):
+                self.assertEqual(views._try_read_local_arena("ch0/page.md"), "# Local page")
+                self.assertIsNone(views._try_read_local_arena("../secret.txt"))
+                self.assertIsNone(views._try_read_local_arena("ch0"))
