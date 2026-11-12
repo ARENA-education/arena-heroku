@@ -1,5 +1,7 @@
 import json
 import re
+import tempfile
+from pathlib import Path
 from unittest import mock
 
 from django.http import Http404
@@ -389,6 +391,39 @@ class DetailsBlockTests(SimpleTestCase):
         html = views._render_markdown(text)
         self.assertIn("Later <strong>bold</strong>.", html)
         self.assertEqual(html.count("<details>"), html.count("</details>"))
+
+class LocalArenaReadTests(SimpleTestCase):
+    def test_reads_from_a_local_checkout_but_not_outside_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "materials"
+            (root / "ch0").mkdir(parents=True)
+            (root / "ch0" / "page.md").write_text("# Local page", encoding="utf-8")
+            (Path(tmp) / "secret.txt").write_text("secret", encoding="utf-8")
+            with mock.patch.object(views, "LOCAL_ARENA_PATHS", [root]):
+                self.assertEqual(views._try_read_local_arena("ch0/page.md"), "# Local page")
+                self.assertIsNone(views._try_read_local_arena("../secret.txt"))
+                self.assertIsNone(views._try_read_local_arena("ch0"))
+
+
+class NoCopyCodeBlockTests(SimpleTestCase):
+    """```{.python .no-copy} fences (emitted by ARENA_materials for reference-only code) keep their highlighting and
+    gain the no-copy class that right-sidebar.js uses to swap the copy button for a crossed-out one."""
+
+    def test_no_copy_fence_is_highlighted_and_marked(self):
+        html = views._render_markdown("```{.python .no-copy}\ndef f():\n    return 1\n```\n")
+        self.assertIn('<div class="no-copy codehilite">', html)
+        self.assertIn('<span class="k">def</span>', html)
+
+    def test_no_copy_fence_inside_details(self):
+        html = views._render_markdown(
+            "<details><summary>Ref</summary>\n\n```{.python .no-copy}\nclass A:\n    pass\n```\n\n</details>\n"
+        )
+        self.assertIn('<div class="no-copy codehilite">', html)
+
+    def test_plain_fence_is_unchanged(self):
+        html = views._render_markdown("```python\nx = 1\n```\n")
+        self.assertIn('<div class="codehilite">', html)
+        self.assertNotIn("no-copy", html)
 
 
 class LatexEscapingTests(SimpleTestCase):
