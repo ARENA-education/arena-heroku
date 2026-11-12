@@ -21,6 +21,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 from openai import OpenAI
 
+from .build_info import get_build_info
 from .chapters import get_all_chapters, get_chapter, get_section
 from .github_cache import fetch_github_text
 
@@ -658,6 +659,7 @@ def version_view(request):
 def home(request):
     """Homepage view - displays chapter cards."""
     context = _get_context_base()
+    context["build_info"] = get_build_info()
     return render(request, "home.html", context)
 
 

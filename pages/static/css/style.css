@@ -2929,3 +2929,12 @@ html.diff-unsync .diff-col {
 html.diff-unsync .diff-col-head {
     top: 0;
 }
+
+.site-footer .build-info {
+    margin-top: var(--spacing-xs, 0.25rem);
+    font-size: 0.75rem;
+}
+
+.site-footer .build-info a {
+    color: inherit;
+}
