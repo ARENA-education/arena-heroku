@@ -1,10 +1,14 @@
 import json
+import os
+import re
+import tempfile
+from pathlib import Path
 from unittest import mock
 
 from django.http import Http404
 from django.test import SimpleTestCase, override_settings
 
-from . import views
+from . import build_info, views
 
 CHAPTER = {
     "title": "Fundamentals",
@@ -362,3 +366,166 @@ class PrPreviewTests(SimpleTestCase):
         self.assertIn(f"{COLAB}/main/{RAYS_NOTEBOOK}?t=20260901", html)
         for marker in ("preview-banner", "js/diff.js", "ARENA_BASE_PATH =", "noindex"):
             self.assertNotIn(marker, html)
+
+
+class DetailsBlockTests(SimpleTestCase):
+    """`<details>` dropdowns, including dropdowns nested inside a dropdown."""
+
+    NESTED = (
+        "<details>\n<summary>Outer</summary>\n\nOuter **before**.\n\n"
+        "<details>\n<summary>Inner</summary>\n\nInner **bold**.\n</details>\n\n"
+        "Outer **after**.\n</details>\n\nAfter the dropdown.\n"
+    )
+
+    def outermost_details(self, html: str) -> str:
+        """The first <details> element of `html`, matched by nesting depth."""
+        depth = 0
+        for m in re.finditer(r"<(/?)details\b[^>]*>", html):
+            depth += -1 if m.group(1) else 1
+            if depth == 0:
+                return html[: m.end()]
+        self.fail(f"unclosed <details> in {html!r}")
+
+    def test_nested_dropdown_stays_inside_its_parent(self):
+        html = views._render_markdown(self.NESTED)
+        self.assertEqual(html.count("<details>"), 2)
+        self.assertEqual(html.count("</details>"), 2)
+        outer = self.outermost_details(html[html.index("<details>"):])
+        # The parent's text after the inner dropdown is still inside the parent, as its own paragraph (the
+        # parent's </details> used to end up inside that paragraph: "<p>Outer ... </details></p>")...
+        self.assertIn("<p>Outer <strong>after</strong>.</p>", outer)
+        self.assertNotIn("</details></p>", html)
+        # ...and the page text after the dropdown is not.
+        self.assertNotIn("After the dropdown.", outer)
+        self.assertIn("<p>After the dropdown.</p>", html)
+
+    def test_markdown_inside_a_nested_dropdown_is_rendered(self):
+        html = views._render_markdown(self.NESTED)
+        self.assertIn("Inner <strong>bold</strong>.", html)
+        self.assertNotIn("**", html)
+        self.assertNotIn("DETAILSBLOCK", html)
+
+    def test_single_dropdown(self):
+        html = views._render_markdown("<details>\n<summary>Hint</summary>\n\nUse **this**.\n</details>\n")
+        self.assertIn("<summary>Hint</summary>", html)
+        self.assertIn("Use <strong>this</strong>.", html)
+        self.assertEqual(html.count("</details>"), 1)
+
+    def test_unclosed_dropdown_runs_to_the_end(self):
+        html = views._render_markdown("<details>\n<summary>Oops</summary>\n\nNo **closing** tag.\n")
+        self.assertIn("No <strong>closing</strong> tag.", html)
+        self.assertEqual(html.count("</details>"), 1)
+        self.assertNotIn("DETAILSBLOCK", html)
+
+    def test_dropdowns_after_an_unclosed_one_are_still_rendered(self):
+        text = (
+            "<details>\n<summary>Never closed</summary>\n\nOops.\n\n"
+            "<details>\n<summary>Later</summary>\n\nLater **bold**.\n</details>\n"
+        )
+        html = views._render_markdown(text)
+        self.assertIn("Later <strong>bold</strong>.", html)
+        self.assertEqual(html.count("<details>"), html.count("</details>"))
+
+class LocalArenaReadTests(SimpleTestCase):
+    def test_reads_from_a_local_checkout_but_not_outside_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "materials"
+            (root / "ch0").mkdir(parents=True)
+            (root / "ch0" / "page.md").write_text("# Local page", encoding="utf-8")
+            (Path(tmp) / "secret.txt").write_text("secret", encoding="utf-8")
+            with mock.patch.object(views, "LOCAL_ARENA_PATHS", [root]):
+                self.assertEqual(views._try_read_local_arena("ch0/page.md"), "# Local page")
+                self.assertIsNone(views._try_read_local_arena("../secret.txt"))
+                self.assertIsNone(views._try_read_local_arena("ch0"))
+
+
+class NoCopyCodeBlockTests(SimpleTestCase):
+    """```{.python .no-copy} fences (emitted by ARENA_materials for reference-only code) keep their highlighting and
+    gain the no-copy class that right-sidebar.js uses to swap the copy button for a crossed-out one."""
+
+    def test_no_copy_fence_is_highlighted_and_marked(self):
+        html = views._render_markdown("```{.python .no-copy}\ndef f():\n    return 1\n```\n")
+        self.assertIn('<div class="no-copy codehilite">', html)
+        self.assertIn('<span class="k">def</span>', html)
+
+    def test_no_copy_fence_inside_details(self):
+        html = views._render_markdown(
+            "<details><summary>Ref</summary>\n\n```{.python .no-copy}\nclass A:\n    pass\n```\n\n</details>\n"
+        )
+        self.assertIn('<div class="no-copy codehilite">', html)
+
+    def test_plain_fence_is_unchanged(self):
+        html = views._render_markdown("```python\nx = 1\n```\n")
+        self.assertIn('<div class="codehilite">', html)
+        self.assertNotIn("no-copy", html)
+
+
+class LatexEscapingTests(SimpleTestCase):
+    """`<`, `>` and `&` in LaTeX must reach the page as text, not as HTML."""
+
+    def test_less_than_in_display_math_is_escaped(self):
+        html = views._render_markdown("$$\np(o_t \\mid o_{<t}) > 0\n$$\n\nAfter the formula.\n")
+        self.assertIn("o_{&lt;t}", html)
+        self.assertIn("&gt; 0", html)
+        self.assertNotIn("<t}", html)  # would start an HTML tag in the browser
+        self.assertIn("<p>After the formula.</p>", html)
+
+    def test_less_than_in_inline_math_is_escaped(self):
+        html = views._render_markdown("The tokens $x_{<t}$ come before $x_t$.\n")
+        self.assertIn("$x_{&lt;t}$", html)
+        self.assertNotIn("<t}", html)
+
+    def test_alignment_ampersands_are_escaped(self):
+        html = views._render_markdown("$$\n\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}\n$$\n")
+        self.assertIn("a &amp;= b", html)
+
+
+class SplitSectionRedirectTests(SimpleTestCase):
+    def test_old_subsection_urls_go_to_the_child_section(self):
+        response = self.client.get("/chapter0_fundamentals/05_vaes_gans/2-gans/")
+        self.assertEqual(response.status_code, 301)
+        self.assertEqual(response["Location"], "/chapter0_fundamentals/52_gans/1-gans/")
+
+    def test_unknown_subsection_goes_to_the_group_landing_page(self):
+        response = self.client.get("/chapter0_fundamentals/05_vaes_gans/intro/")
+        self.assertEqual(response.status_code, 301)
+        self.assertEqual(response["Location"], "/chapter0_fundamentals/05_vaes_gans/")
+
+    def test_old_merged_2_2_subsection_urls_go_to_dqn_and_vpg(self):
+        response = self.client.get("/chapter2_rl/02_dqn_vpg/1-deep-q-learning/")
+        self.assertEqual(response["Location"], "/chapter2_rl/21_dqn/1-q-network-replay-buffer/")
+        response = self.client.get("/chapter2_rl/02_dqn_vpg/2-vpg/")
+        self.assertEqual(response["Location"], "/chapter2_rl/22_vpg/1-policy-gradient-theorem/")
+
+
+class BuildInfoTests(SimpleTestCase):
+    def setUp(self):
+        build_info.get_build_info.cache_clear()
+        self.addCleanup(build_info.get_build_info.cache_clear)
+
+    def test_heroku_env_wins(self):
+        env = {"HEROKU_SLUG_COMMIT": "a" * 40, "HEROKU_RELEASE_CREATED_AT": "2026-11-12T19:29:49Z"}
+        with mock.patch.dict(os.environ, env), mock.patch.object(build_info, "_from_build_file", return_value=("b" * 40, "")):
+            info = build_info.get_build_info()
+        self.assertEqual(info["short"], "aaaaaaa")
+        self.assertEqual(info["built_at"].hour, 19)
+
+    def test_build_file_then_none(self):
+        with mock.patch.object(build_info, "_from_heroku_env", return_value=("", "")), \
+             mock.patch.object(build_info, "_from_build_file", return_value=("c" * 40, "bad date")):
+            info = build_info.get_build_info()
+        self.assertEqual(info["commit_url"], f"{build_info.REPO_URL}/commit/{'c' * 40}")
+        self.assertIsNone(info["built_at"])
+        build_info.get_build_info.cache_clear()
+        with mock.patch.object(build_info, "_from_heroku_env", return_value=("", "")), \
+             mock.patch.object(build_info, "_from_build_file", return_value=("", "")), \
+             mock.patch.object(build_info, "_from_git", return_value=("", "")):
+            self.assertIsNone(build_info.get_build_info())
+
+    @override_settings(STORAGES={"staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}})
+    def test_home_footer(self):
+        info = {"commit": "d" * 40, "short": "ddddddd", "commit_url": "https://x/commit/d", "built_at": None, "repo_url": "https://x"}
+        with mock.patch("pages.views.get_build_info", return_value=info):
+            html = self.client.get("/").content.decode()
+        self.assertIn('<a href="https://x/commit/d"><code>ddddddd</code></a>', html)
+        self.assertIn('class="build-info"', html)

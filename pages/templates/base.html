@@ -61,6 +61,7 @@
       <span id="diff-controls" class="preview-banner-controls">
         <label><input type="checkbox" id="diff-toggle" /> diff vs main</label>
         <label id="diff-sync-label"><input type="checkbox" id="diff-sync" checked /> sync scroll</label>
+        <label id="diff-hide-label"><input type="checkbox" id="diff-hide" checked /> hide unchanged</label>
         <span id="diff-status"></span>
       </span>
     </div>
@@ -165,6 +166,14 @@
         class="right-sidebar-resize-handle"
         id="right-sidebar-resize-handle"
       ></div>
+      <button
+        class="right-sidebar-collapse-btn"
+        id="right-sidebar-collapse-btn"
+        aria-label="Collapse right sidebar"
+        title="Collapse sidebar"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+      </button>
 
       <!-- Select Context Section -->
       <div class="right-sidebar-section download-section" id="download-section">
@@ -404,6 +413,7 @@
     <footer class="site-footer">
       <div class="footer-container">
         <p>ARENA - Alignment Research Engineer Accelerator</p>
+        {% block footer_extra %}{% endblock %}
       </div>
     </footer>
 

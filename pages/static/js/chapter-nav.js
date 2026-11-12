@@ -135,16 +135,24 @@
             sidebar.style.width = savedWidth + 'px';
         }
 
-        // Load collapsed state
+        // Load collapsed state. `resizing` turns the width transition off, so
+        // a page that loads collapsed does not visibly slide shut.
         const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
         if (isCollapsed) {
-            sidebar.classList.add('collapsed');
+            sidebar.classList.add('collapsed', 'resizing');
             if (sidebarToggle) sidebarToggle.classList.add('collapsed');
+            requestAnimationFrame(() => requestAnimationFrame(() => sidebar.classList.remove('resizing')));
         }
 
         // Toggle button click - only expands (button is only visible when collapsed)
         if (sidebarToggle) {
             sidebarToggle.addEventListener('click', expandSidebar);
+        }
+
+        // Collapse button in the sidebar's header
+        const collapseBtn = document.getElementById('sidebar-collapse-btn');
+        if (collapseBtn) {
+            collapseBtn.addEventListener('click', collapseSidebar);
         }
 
         // Resize handle drag
@@ -176,7 +184,7 @@
     }
 
     /**
-     * Collapse sidebar (called when dragged small enough)
+     * Collapse sidebar (called when dragged small enough, or by its collapse button)
      */
     function collapseSidebar() {
         if (!sidebar || !sidebarToggle) return;
@@ -578,7 +586,8 @@
         subsectionList.innerHTML = subsections.map(sub => `
             <li>
                 <a href="${BASE_PATH}/${currentChapterId}/${currentSectionId}/${sub.id}/"
-                   class="subsection-link ${sub.id === currentSubsectionId ? 'active' : ''}"
+                   class="subsection-link ${sub.id === currentSubsectionId ? 'active' : ''}${sub.changed ? ' preview-changed' : ''}"
+                   ${sub.changed ? 'title="Changed in this pull request"' : ''}
                    data-subsection-id="${sub.id}">
                     <span class="subsection-title">${escapeHtml(sub.title)}</span>
                 </a>
@@ -618,6 +627,45 @@
 
         // Update TOC
         renderToc(subsection.headers);
+
+        // Update breadcrumb
+        updateBreadcrumb(subsection);
+    }
+
+    /**
+     * Update the breadcrumb to show the current section and subsection
+     * (mirrors the server-rendered breadcrumb in chapter.html)
+     */
+    function updateBreadcrumb(subsection) {
+        const breadcrumbList = document.querySelector('.breadcrumb-list');
+        if (!breadcrumbList) return;
+
+        // Keep the "Content" and chapter items, rebuild the rest
+        const items = breadcrumbList.querySelectorAll('.breadcrumb-item');
+        for (let i = 2; i < items.length; i++) {
+            items[i].remove();
+        }
+
+        const section = getCurrentSectionMeta();
+        if (section) {
+            const li = document.createElement('li');
+            li.className = 'breadcrumb-item';
+            const a = document.createElement('a');
+            a.href = `${BASE_PATH}/${currentChapterId}/${currentSectionId}/`;
+            a.className = 'breadcrumb-link';
+            a.textContent = `${section.number} ${section.title}`;
+            li.appendChild(a);
+            breadcrumbList.appendChild(li);
+        }
+
+        if (subsection && subsection.id !== 'intro') {
+            const li = document.createElement('li');
+            li.className = 'breadcrumb-item breadcrumb-current';
+            const span = document.createElement('span');
+            span.textContent = subsection.title;
+            li.appendChild(span);
+            breadcrumbList.appendChild(li);
+        }
     }
 
     /**

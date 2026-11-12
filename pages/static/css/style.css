@@ -55,6 +55,7 @@
     --color-primary: #3b82f6;
     --color-primary-hover: #2563eb;
 
+
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
     --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
@@ -76,6 +77,7 @@
 
     --color-primary: #e0e0e0;
     --color-primary-hover: #ffffff;
+
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.5), 0 2px 4px -1px rgba(0, 0, 0, 0.4);
@@ -715,6 +717,44 @@ img {
     /* Arrow points right (to expand) */
 }
 
+/* Collapse buttons inside each sidebar (the toggles above bring them back) */
+.sidebar-collapse-btn,
+.right-sidebar-collapse-btn {
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    color: var(--color-text-muted);
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.sidebar-collapse-btn:hover,
+.right-sidebar-collapse-btn:hover {
+    background: var(--color-surface-hover);
+    border-color: var(--color-border);
+    color: var(--color-text);
+}
+
+.sidebar-collapse-btn svg,
+.right-sidebar-collapse-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.right-sidebar-collapse-btn {
+    position: absolute;
+    top: var(--spacing-sm);
+    right: var(--spacing-sm);
+    z-index: 11;
+}
+
 /* --------------------------------------------------------------------------
    Right Sidebar (Download & Chat)
    -------------------------------------------------------------------------- */
@@ -1244,6 +1284,10 @@ body:has(.right-sidebar:not(.collapsed)) .main-content:not(:has(.chapter-layout)
 
 .sidebar-header {
     padding: var(--spacing-lg);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
 }
 
 .sidebar-title {
@@ -1835,6 +1879,70 @@ body:has(.right-sidebar:not(.collapsed)) .main-content:not(:has(.chapter-layout)
 .code-copy-button svg {
     width: 14px;
     height: 14px;
+}
+
+/* Reference-only code blocks (```{.python .no-copy} in the markdown): the copy button is crossed out, copies
+   nothing, and explains why in a tooltip (see addNoCopyMarker in right-sidebar.js). */
+.code-copy-button.no-copy-button {
+    cursor: not-allowed;
+}
+
+.codehilite:hover .code-copy-button.no-copy-button,
+.code-copy-button.no-copy-button:focus-visible,
+.code-copy-button.no-copy-button.show-tooltip {
+    opacity: 1;
+}
+
+.code-copy-button.no-copy-button:focus-visible {
+    outline: 2px solid var(--color-text-muted);
+    outline-offset: 2px;
+}
+
+.code-copy-button.no-copy-button svg {
+    width: 18px;
+    height: 18px;
+}
+
+.no-copy-button .no-copy-slash {
+    stroke: currentColor;
+    stroke-width: 2;
+}
+
+.no-copy-tooltip {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    width: max-content;
+    max-width: min(320px, 70vw);
+    padding: 6px 10px;
+    font-family: var(--font-body);
+    font-size: 0.75rem;
+    font-weight: 400;
+    line-height: 1.45;
+    text-align: left;
+    white-space: normal;
+    color: var(--color-text);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md);
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity var(--transition-fast);
+    pointer-events: none;
+    z-index: 2;
+}
+
+.no-copy-button:hover .no-copy-tooltip,
+.no-copy-button:focus-visible .no-copy-tooltip,
+.no-copy-button.show-tooltip .no-copy-tooltip {
+    visibility: visible;
+    opacity: 1;
+}
+
+.no-copy-button.tooltip-dismissed .no-copy-tooltip {
+    visibility: hidden;
+    opacity: 0;
 }
 
 .codehilite pre {
@@ -2506,7 +2614,8 @@ body:has(.right-sidebar:not(.collapsed)) .main-content:not(:has(.chapter-layout)
     }
 
     .sidebar-toggle,
-    .sidebar-resize-handle {
+    .sidebar-resize-handle,
+    .sidebar-collapse-btn {
         display: none;
     }
 
@@ -2632,12 +2741,37 @@ body:not(:has(#content-area article.markdown-content)) #diff-controls {
     display: none;
 }
 
-#diff-sync-label {
+#diff-sync-label,
+#diff-hide-label {
     display: none;
 }
 
-html.diff-open #diff-sync-label {
+html.diff-open #diff-sync-label,
+html.diff-open #diff-hide-label {
     display: inline-flex;
+}
+
+/* Sidebar: the sections this PR changes, and within one, the subsections
+   whose content differs from main's (views.py sets `changed`). */
+.section-link.preview-changed,
+.subsection-link.preview-changed {
+    background: rgba(34, 197, 94, 0.16);
+    color: var(--color-text);
+}
+
+.section-link.preview-changed:hover,
+.subsection-link.preview-changed:hover {
+    background: rgba(34, 197, 94, 0.26);
+}
+
+.section-link.preview-changed.active,
+.subsection-link.preview-changed.active {
+    background: rgba(34, 197, 94, 0.32);
+    color: var(--color-text);
+}
+
+.subsection-link.preview-changed.active {
+    border-left-color: #16a34a;
 }
 
 .preview-index {
@@ -2748,6 +2882,37 @@ mark.diff-ins { background: rgba(34, 197, 94, 0.45); color: inherit; }
     background: repeating-linear-gradient(-45deg, transparent 0 6px, var(--color-bg-tertiary) 6px 12px);
 }
 
+/* "hide unchanged": a run of blocks identical on both sides is folded into a
+   strip that says how many, in both columns so the rows stay level; a click
+   unfolds that run. */
+.diff-hidden {
+    display: none !important;
+}
+
+.diff-fold {
+    margin: 0.75rem 0;
+    padding: 0.35rem 0.75rem;
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-secondary);
+    color: var(--color-text-muted);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    user-select: none;
+}
+
+.diff-fold:hover,
+.diff-fold:focus-visible {
+    background: var(--color-bg-tertiary);
+    color: var(--color-text-secondary);
+}
+
+/* An unfolded run keeps its strip, drawn solid so it reads as "open". */
+.diff-fold-open {
+    border-style: solid;
+    background: var(--color-bg-tertiary);
+}
+
 /* Sync off: each column scrolls on its own inside a viewport-high frame. */
 html.diff-unsync .diff-view {
     height: calc(100vh - var(--nav-height) - 2rem);
@@ -2763,4 +2928,13 @@ html.diff-unsync .diff-col {
 
 html.diff-unsync .diff-col-head {
     top: 0;
+}
+
+.site-footer .build-info {
+    margin-top: var(--spacing-xs, 0.25rem);
+    font-size: 0.75rem;
+}
+
+.site-footer .build-info a {
+    color: inherit;
 }

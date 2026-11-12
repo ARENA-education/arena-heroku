@@ -21,6 +21,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 from openai import OpenAI
 
+from .build_info import get_build_info
 from .chapters import get_all_chapters, get_chapter, get_section
 from .github_cache import fetch_github_text
 
@@ -29,8 +30,11 @@ logger = logging.getLogger(__name__)
 # Directory for local content files (group overview pages)
 CONTENT_DIR = Path(__file__).parent / "content"
 
-# Local ARENA_materials repo paths (for development) - same layout as chapters.py
+# Local ARENA_materials repo paths (for development) - same layout as chapters.py.
+# ARENA_MATERIALS_DIR (if set) points at a checkout anywhere on disk and wins;
+# otherwise an ARENA_materials/ directory next to this repo is used.
 LOCAL_ARENA_PATHS = [
+    *([Path(os.environ["ARENA_MATERIALS_DIR"]).expanduser()] if os.environ.get("ARENA_MATERIALS_DIR") else []),
     Path(__file__).parent.parent.parent.parent / "ARENA_materials",
     Path(__file__).parent.parent.parent / "ARENA_materials",
 ]
@@ -43,7 +47,7 @@ SUBSECTION_DELIMITER = "=== NEW CHAPTER ==="
 
 # Bump this string whenever _render_markdown logic changes so that cached
 # entries from a previous code version are automatically invalidated.
-_RENDER_VERSION = "2026-11-06-v4-list-blank-line"
+_RENDER_VERSION = "2026-11-12-v6-list-blank-line"
 
 # Render cache: sha256(version + raw_text) -> parsed subsections list. Bounded:
 # every edit to a page (and every PR preview) adds a new key, and nothing else
@@ -72,7 +76,10 @@ def _try_read_local_arena(md_path: str) -> str | None:
     """Try to read a file from the local ARENA_materials directory (for development)."""
     for base in LOCAL_ARENA_PATHS:
         filepath = base / md_path
-        if filepath.exists():
+        # Never read outside the checkout (md_path can come from /api/raw/<path>)
+        if not filepath.resolve().is_relative_to(base.resolve()):
+            continue
+        if filepath.is_file():
             logger.info("Reading from local ARENA_materials: %s", filepath)
             return filepath.read_text(encoding="utf-8")
     return None
@@ -191,6 +198,25 @@ def _fetch_content(md_path: str, preview: dict | None = None) -> str:
     if local is not None:
         return local
     return _fetch_text(_raw_url(md_path))
+
+
+def _mark_changed_subsections(subsections: list[dict], section: dict, preview: dict | None) -> list[dict]:
+    """
+    In a PR preview, flag each subsection whose rendered HTML differs from
+    main's (`changed`), so the sidebar can tint it. Main's text gets the same
+    Colab-link rewrite first, so only the PR's own edits count. A section the
+    PR did not regenerate is unchanged throughout; a subsection main lacks is
+    changed. Returns copies: `subsections` may be the render cache's own list.
+    """
+    if preview is None or section.get("path") not in preview["pages"]:
+        return subsections
+    try:
+        main = _parse_subsections(_preview_colab_links(_fetch_content(section["path"]), preview))
+    except (Http404, requests.RequestException) as e:
+        logger.warning("Preview: could not load main's '%s' to compare: %s", section["path"], e)
+        main = []
+    main_html = {s["id"]: s["html"] for s in main}
+    return [{**s, "changed": main_html.get(s["id"]) != s["html"]} for s in subsections]
 
 
 def _read_local_content(filename: str) -> str:
@@ -333,14 +359,25 @@ def _protect_latex(text: str) -> tuple[str, dict]:
     """
     Protect LaTeX blocks from markdown processing by replacing with placeholders.
     Returns the modified text and a dict mapping placeholders to original LaTeX.
+
+    A placeholder is a hash of its LaTeX, not a random token: one inside a
+    heading ends up in that heading's anchor id (the toc extension slugifies
+    the text before the LaTeX is restored), so a random one would change the
+    id on every render, breaking deep links and making identical pages render
+    differently (PR previews compare main's render with the PR's).
+
+    The LaTeX is HTML-escaped when it is put back, so `<`, `>` and `&` reach the
+    page as text: unescaped, `x_{<t}` makes the browser start an HTML tag at `<t`,
+    which swallows the rest of the formula and the text after it. KaTeX reads the
+    page's text, so it still sees the original `<`.
     """
     placeholders = {}
 
     # Protect display math blocks ($$...$$) - these may span multiple lines
     def replace_display(match):
-        placeholder = f"LATEXDISPLAY{uuid.uuid4().hex}ENDLATEX"
+        placeholder = f"LATEXDISPLAY{hashlib.sha256(match.group(0).encode()).hexdigest()[:32]}ENDLATEX"
         # Wrap in a div with class for proper styling
-        content = match.group(1)
+        content = html.escape(match.group(1), quote=False)
         placeholders[placeholder] = f'<div class="katex-display-wrapper">$${content}$$</div>'
         return placeholder
 
@@ -348,8 +385,8 @@ def _protect_latex(text: str) -> tuple[str, dict]:
 
     # Protect inline math ($...$) - but not $$ which we already handled
     def replace_inline(match):
-        placeholder = f"LATEXINLINE{uuid.uuid4().hex}ENDLATEX"
-        content = match.group(1)
+        placeholder = f"LATEXINLINE{hashlib.sha256(match.group(0).encode()).hexdigest()[:32]}ENDLATEX"
+        content = html.escape(match.group(1), quote=False)
         placeholders[placeholder] = f"${content}$"
         return placeholder
 
@@ -368,6 +405,33 @@ def _restore_latex(html_text: str, placeholders: dict) -> str:
     return html_text
 
 
+_DETAILS_TAG = re.compile(r"<(/?)details\b[^>]*>", re.IGNORECASE)
+
+
+def _top_level_details_spans(text: str) -> list[tuple[int, int]]:
+    """
+    (start, end) of each outermost <details>...</details> block in `text`.
+
+    Each </details> is paired with the most recent unpaired <details>, so a
+    dropdown inside another dropdown stays part of its parent (a non-greedy
+    regex would end the parent at the inner dropdown's </details>). A <details>
+    that is never closed runs to the end of `text`, as it would in the browser.
+    A stray </details> is ignored.
+    """
+    pairs, open_starts = [], []
+    for m in _DETAILS_TAG.finditer(text):
+        if not m.group(1):  # <details ...>
+            open_starts.append(m.start())
+        elif open_starts:  # </details>
+            pairs.append((open_starts.pop(), m.end()))
+    pairs += [(start, len(text)) for start in open_starts]  # never closed
+    spans = []
+    for start, end in sorted(pairs):
+        if not spans or start >= spans[-1][1]:  # not inside the previous outermost block
+            spans.append((start, end))
+    return spans
+
+
 def _preprocess_details_blocks(text: str) -> tuple[str, dict]:
     """
     Pre-render <details> block content before the main markdown call.
@@ -378,27 +442,32 @@ def _preprocess_details_blocks(text: str) -> tuple[str, dict]:
     and no italic/bold is accidentally applied inside code), and replaces the
     block with a placeholder. The rendered HTML is restored after the main call.
 
+    Dropdowns nested inside a dropdown are handled recursively: each block's
+    content is pre-processed the same way before it is rendered.
+
     Returns (modified_text, placeholders_dict).
     """
     placeholders: dict[str, str] = {}
 
-    def render_and_replace(match: re.Match) -> str:
-        full_match = match.group(0)
-        opening_tag = match.group(1)  # e.g. "<details>" or "<details open>"
+    def render_block(full_match: str) -> str:
+        opening_tag = _DETAILS_TAG.match(full_match).group(0)  # e.g. "<details>" or "<details open>"
         summary_match = re.search(r"<summary[^>]*>(.*?)</summary>", full_match, re.DOTALL)
         if not summary_match:
             return full_match
 
         summary_tag = summary_match.group(0)
         content_start = full_match.find("</summary>") + len("</summary>")
-        content_end = full_match.rfind("</details>")
-        if content_end == -1:
-            return full_match
+        closed = re.search(r"</details>\s*$", full_match, re.IGNORECASE)
+        content_end = closed.start() if closed else len(full_match)  # an unclosed block runs to the end
 
         content = full_match[content_start:content_end].strip()
 
         # Handle blockquotes inside details
         content = content.replace("<blockquote>", '<blockquote markdown="1">')
+
+        # Render any dropdowns nested in this one first (they'd be raw HTML to the
+        # md.markdown() call below, so the markdown inside them would not render)
+        content, nested = _preprocess_details_blocks(content)
 
         # Render the content with markdown (same extensions minus toc, since
         # headers inside <details> shouldn't appear in the page-level TOC)
@@ -415,13 +484,21 @@ def _preprocess_details_blocks(text: str) -> tuple[str, dict]:
             },
         )
 
+        for nested_placeholder, nested_html in nested.items():
+            rendered_content = rendered_content.replace(f"<p>{nested_placeholder}</p>", nested_html)
+            rendered_content = rendered_content.replace(nested_placeholder, nested_html)
+
         details_html = f"{opening_tag}\n{summary_tag}\n{rendered_content}\n</details>"
         placeholder = f"DETAILSBLOCK{uuid.uuid4().hex}END"
         placeholders[placeholder] = details_html
         return placeholder
 
-    text = re.sub(r"(<details[^>]*>).*?</details>", render_and_replace, text, flags=re.DOTALL)
-    return text, placeholders
+    pieces, last = [], 0
+    for start, end in _top_level_details_spans(text):
+        pieces += [text[last:start], render_block(text[start:end])]
+        last = end
+    pieces.append(text[last:])
+    return "".join(pieces), placeholders
 
 
 def _render_markdown(text: str) -> str:
@@ -615,6 +692,32 @@ def legacy_section_redirect(request, section_id: str, subsection_id: str | None 
     return redirect(base, permanent=True)
 
 
+# Redirects for subsections of sections that were split into a group of child sections, keyed by
+# (chapter_id, old section_id), then old subsection_id -> "new_section_id/new_subsection_id". The
+# old section_id is now the group's id, so a bare /chapter/section/ URL still serves its landing page.
+SPLIT_SECTION_REDIRECTS = {
+    ("chapter0_fundamentals", "05_vaes_gans"): {
+        "1-autoencoders-vaes": "51_vaes/1-autoencoders-vaes",
+        "2-gans": "52_gans/1-gans",
+        "3-bonus-transposed-convolutions": "51_vaes/bonus-transposed-convolutions",
+    },
+    # 2.2 was one merged page from 2026-02-23 to 2026-09-01
+    ("chapter2_rl", "02_dqn_vpg"): {
+        "1-deep-q-learning": "21_dqn/1-q-network-replay-buffer",
+        "2-vpg": "22_vpg/1-policy-gradient-theorem",
+    },
+}
+
+
+def split_section_redirect(request, chapter_id: str, section_id: str, subsection_id: str):
+    """Redirect an old subsection URL of a split section to the child section that now holds it."""
+    new_path = SPLIT_SECTION_REDIRECTS[(chapter_id, section_id)].get(subsection_id)
+    if new_path is None:
+        # "intro", or unknown - redirect to the group's landing page
+        return redirect(f"/{chapter_id}/{section_id}/", permanent=True)
+    return redirect(f"/{chapter_id}/{new_path}/", permanent=True)
+
+
 def custom_404(request, exception):
     """Custom 404 page with link back to homepage."""
     context = _get_context_base()
@@ -633,6 +736,7 @@ def version_view(request):
 def home(request):
     """Homepage view - displays chapter cards."""
     context = _get_context_base()
+    context["build_info"] = get_build_info()
     return render(request, "home.html", context)
 
 
@@ -722,6 +826,7 @@ def chapter_view(
             text = _fetch_content(section["path"], preview)
         logger.info("Content loaded for '%s' (%d chars)", section_id, len(text))
         subsections = _parse_subsections(text)
+        subsections = _mark_changed_subsections(subsections, section, preview)
     except Http404 as e:
         url = section.get("local_path") or section.get("path", "")
         logger.warning("Content not found for section '%s' (%s): %s", section_id, url, e)
@@ -819,6 +924,7 @@ def section_api(request, chapter_id: str, section_id: str, pr: int | None = None
             text = _fetch_content(path, preview)
         logger.info("API: Content loaded for '%s' (%d chars)", section_id, len(text))
         subsections = _parse_subsections(text)
+        subsections = _mark_changed_subsections(subsections, section, preview)
     except Http404 as e:
         url = section.get("local_path") or section.get("path", "")
         logger.warning("API: Content not found for section '%s' (%s): %s", section_id, url, e)
