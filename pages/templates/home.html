@@ -373,3 +373,12 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
  
 {% endblock %}
+
+{% block footer_extra %}
+{% if build_info %}
+<p class="build-info">
+  Site build <a href="{{ build_info.commit_url }}"><code>{{ build_info.short }}</code></a>{% if build_info.built_at %}, {{ build_info.built_at|date:"j M Y, H:i" }} UTC{% endif %}
+  · <a href="{{ build_info.repo_url }}">source</a>
+</p>
+{% endif %}
+{% endblock %}

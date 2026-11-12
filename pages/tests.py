@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -7,7 +8,7 @@ from unittest import mock
 from django.http import Http404
 from django.test import SimpleTestCase, override_settings
 
-from . import views
+from . import build_info, views
 
 CHAPTER = {
     "title": "Fundamentals",
@@ -462,3 +463,36 @@ class SplitSectionRedirectTests(SimpleTestCase):
         self.assertEqual(response["Location"], "/chapter2_rl/21_dqn/1-q-network-replay-buffer/")
         response = self.client.get("/chapter2_rl/02_dqn_vpg/2-vpg/")
         self.assertEqual(response["Location"], "/chapter2_rl/22_vpg/1-policy-gradient-theorem/")
+
+
+class BuildInfoTests(SimpleTestCase):
+    def setUp(self):
+        build_info.get_build_info.cache_clear()
+        self.addCleanup(build_info.get_build_info.cache_clear)
+
+    def test_heroku_env_wins(self):
+        env = {"HEROKU_SLUG_COMMIT": "a" * 40, "HEROKU_RELEASE_CREATED_AT": "2026-11-12T19:29:49Z"}
+        with mock.patch.dict(os.environ, env), mock.patch.object(build_info, "_from_build_file", return_value=("b" * 40, "")):
+            info = build_info.get_build_info()
+        self.assertEqual(info["short"], "aaaaaaa")
+        self.assertEqual(info["built_at"].hour, 19)
+
+    def test_build_file_then_none(self):
+        with mock.patch.object(build_info, "_from_heroku_env", return_value=("", "")), \
+             mock.patch.object(build_info, "_from_build_file", return_value=("c" * 40, "bad date")):
+            info = build_info.get_build_info()
+        self.assertEqual(info["commit_url"], f"{build_info.REPO_URL}/commit/{'c' * 40}")
+        self.assertIsNone(info["built_at"])
+        build_info.get_build_info.cache_clear()
+        with mock.patch.object(build_info, "_from_heroku_env", return_value=("", "")), \
+             mock.patch.object(build_info, "_from_build_file", return_value=("", "")), \
+             mock.patch.object(build_info, "_from_git", return_value=("", "")):
+            self.assertIsNone(build_info.get_build_info())
+
+    @override_settings(STORAGES={"staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}})
+    def test_home_footer(self):
+        info = {"commit": "d" * 40, "short": "ddddddd", "commit_url": "https://x/commit/d", "built_at": None, "repo_url": "https://x"}
+        with mock.patch("pages.views.get_build_info", return_value=info):
+            html = self.client.get("/").content.decode()
+        self.assertIn('<a href="https://x/commit/d"><code>ddddddd</code></a>', html)
+        self.assertIn('class="build-info"', html)

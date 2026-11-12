@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Heroku Python buildpack hook, run at the end of each build. SOURCE_VERSION
+# (the commit being built) exists only at build time, so save it for the site's
+# footer (pages/build_info.py).
+set -eu
+printf '{"commit": "%s", "built_at": "%s"}\n' "${SOURCE_VERSION:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > build_info.json
