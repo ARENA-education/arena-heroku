@@ -9,6 +9,7 @@ import threading
 import uuid
 import zipfile
 from pathlib import Path
+from urllib.parse import unquote
 
 import markdown as md
 import requests
@@ -28,10 +29,10 @@ logger = logging.getLogger(__name__)
 # Directory for local content files (group overview pages)
 CONTENT_DIR = Path(__file__).parent / "content"
 
-# Local ARENA_3.0 repo paths (for development) - same layout as chapters.py
+# Local ARENA_materials repo paths (for development) - same layout as chapters.py
 LOCAL_ARENA_PATHS = [
-    Path(__file__).parent.parent.parent.parent / "ARENA_3.0",
-    Path(__file__).parent.parent.parent / "ARENA_3.0",
+    Path(__file__).parent.parent.parent.parent / "ARENA_materials",
+    Path(__file__).parent.parent.parent / "ARENA_materials",
 ]
 
 # Initialize tiktoken encoder (cl100k_base is used by GPT-4, Claude, etc.)
@@ -44,7 +45,10 @@ SUBSECTION_DELIMITER = "=== NEW CHAPTER ==="
 # entries from a previous code version are automatically invalidated.
 _RENDER_VERSION = "2026-03-02-v3-details-prerender"
 
-# Render cache: sha256(version + raw_text) -> parsed subsections list
+# Render cache: sha256(version + raw_text) -> parsed subsections list. Bounded:
+# every edit to a page (and every PR preview) adds a new key, and nothing else
+# ever removes the old ones. Oldest-inserted entries are evicted first.
+_RENDER_CACHE_MAX_ENTRIES = 100  # ~0.4 MB of HTML each; the live site uses ~45
 _render_cache: dict[str, list[dict]] = {}
 _render_lock = threading.Lock()
 
@@ -57,19 +61,19 @@ def invalidate_render_cache() -> None:
 
 def _raw_url(md_path: str) -> str:
     """Construct GitHub raw content URL for a markdown file."""
-    owner = os.environ.get("GH_OWNER", "callummcdougall")
-    # repo = os.environ.get("GH_REPO", "ARENA_3.0")
-    repo = os.environ.get("GH_REPO", "ARENA_3.0")
+    owner = os.environ.get("GH_OWNER", "ARENA-education")
+    # repo = os.environ.get("GH_REPO", "ARENA_materials")
+    repo = os.environ.get("GH_REPO", "ARENA_materials")
     branch = os.environ.get("GH_BRANCH", "main")
     return f"https://raw.githubusercontent.com/{owner}/{repo}/refs/heads/{branch}/{md_path}"
 
 
 def _try_read_local_arena(md_path: str) -> str | None:
-    """Try to read a file from the local ARENA_3.0 directory (for development)."""
+    """Try to read a file from the local ARENA_materials directory (for development)."""
     for base in LOCAL_ARENA_PATHS:
         filepath = base / md_path
         if filepath.exists():
-            logger.info("Reading from local ARENA_3.0: %s", filepath)
+            logger.info("Reading from local ARENA_materials: %s", filepath)
             return filepath.read_text(encoding="utf-8")
     return None
 
@@ -88,8 +92,101 @@ def _fetch_text(url: str) -> str:
         raise
 
 
-def _fetch_content(md_path: str) -> str:
-    """Fetch content for a file path: local ARENA_3.0 first, then GitHub."""
+def _preview_raw_url(pr: int, path: str) -> str:
+    """
+    Construct the raw URL of a file in a PR preview.
+
+    Previews live on the content repo's `pr-preview` branch, one `pr-<N>/`
+    directory per open PR, written only by that repo's pr-preview workflow
+    (which gates on the PR author). Never read a PR's own ref here: that would
+    render markdown from anyone who opens a PR, on this site's origin.
+    """
+    base = os.environ.get("PR_PREVIEW_RAW_BASE")
+    if not base:
+        owner = os.environ.get("GH_OWNER", "ARENA-education")
+        repo = os.environ.get("GH_REPO", "ARENA_materials")
+        branch = os.environ.get("PR_PREVIEW_BRANCH", "pr-preview")
+        base = f"https://raw.githubusercontent.com/{owner}/{repo}/refs/heads/{branch}"
+    return f"{base.rstrip('/')}/pr-{pr}/{path}"
+
+
+def _get_preview(pr: int) -> dict:
+    """
+    Load a PR preview's manifest (pr-<N>/preview.json) and return the template
+    context describing it. Raises Http404 if there is no preview for this PR.
+    """
+    try:
+        manifest = json.loads(_fetch_text(_preview_raw_url(pr, "preview.json")))
+    except (requests.RequestException, ValueError) as exc:
+        raise Http404(f"No preview for PR #{pr}") from exc
+    if not isinstance(manifest, dict):
+        raise Http404(f"Malformed preview manifest for PR #{pr}")
+
+    def str_list(key: str) -> list[str]:
+        value = manifest.get(key)
+        return [str(p) for p in value] if isinstance(value, list) else []
+
+    owner = os.environ.get("GH_OWNER", "ARENA-education")
+    repo = os.environ.get("GH_REPO", "ARENA_materials")
+    return {
+        "pr": pr,
+        "title": str(manifest.get("title", "")),
+        "head_sha": str(manifest.get("head_sha", "")),
+        "pages": str_list("pages"),
+        "notebooks": str_list("notebooks"),
+        "base_path": f"/pr-preview/pr-{pr}",
+        "pr_url": f"https://github.com/{owner}/{repo}/pull/{pr}",
+    }
+
+
+# A link that opens one of the content repo's notebooks in Colab:
+# .../github/<owner>/<repo>/blob/<branch>/<path>.ipynb, with an optional ?t=
+# cache-buster. Group 1 is the notebook's path in the repo.
+_COLAB_LINK_RE = re.compile(
+    r"https://colab\.research\.google\.com/github/[^/\s]+/[^/\s]+/blob/[^/\s]+/"
+    r"([^\s()?#\"'<>]+\.ipynb)(?:\?t=\w+)?"
+)
+
+
+def _preview_colab_links(text: str, preview: dict) -> str:
+    """
+    Point a page's Colab links at the PR's copy of each notebook the PR
+    regenerated (the manifest's `notebooks`), which lives next to the pages on
+    the `pr-preview` branch. Links to any other notebook are left alone.
+    """
+    if not preview["notebooks"]:
+        return text
+    owner = os.environ.get("GH_OWNER", "ARENA-education")
+    repo = os.environ.get("GH_REPO", "ARENA_materials")
+    branch = os.environ.get("PR_PREVIEW_BRANCH", "pr-preview")
+    # Colab caches notebooks by URL; the PR's head commit makes each push a new one.
+    suffix = f"?t={preview['head_sha'][:7]}" if re.fullmatch(r"[0-9a-f]{7,40}", preview["head_sha"]) else ""
+
+    def repoint(match: re.Match) -> str:
+        if unquote(match.group(1)) not in preview["notebooks"]:
+            return match.group(0)
+        return (
+            f"https://colab.research.google.com/github/{owner}/{repo}/blob/{branch}"
+            f"/pr-{preview['pr']}/{match.group(1)}{suffix}"
+        )
+
+    return _COLAB_LINK_RE.sub(repoint, text)
+
+
+def _fetch_content(md_path: str, preview: dict | None = None) -> str:
+    """
+    Fetch content for a file path: local ARENA_materials first, then GitHub.
+
+    In a PR preview, pages the PR regenerated come from the preview; every
+    other page is the same as on main. Either way, Colab links to notebooks
+    the PR regenerated open the PR's copy.
+    """
+    if preview is not None:
+        if md_path in preview["pages"]:
+            text = _fetch_text(_preview_raw_url(preview["pr"], md_path))
+        else:
+            text = _fetch_content(md_path)
+        return _preview_colab_links(text, preview)
     local = _try_read_local_arena(md_path)
     if local is not None:
         return local
@@ -162,6 +259,11 @@ def _protect_latex(text: str) -> tuple[str, dict]:
     """
     Protect LaTeX blocks from markdown processing by replacing with placeholders.
     Returns the modified text and a dict mapping placeholders to original LaTeX.
+
+    The LaTeX is HTML-escaped when it is put back, so `<`, `>` and `&` reach the
+    page as text: unescaped, `x_{<t}` makes the browser start an HTML tag at `<t`,
+    which swallows the rest of the formula and the text after it. KaTeX reads the
+    page's text, so it still sees the original `<`.
     """
     placeholders = {}
 
@@ -169,7 +271,7 @@ def _protect_latex(text: str) -> tuple[str, dict]:
     def replace_display(match):
         placeholder = f"LATEXDISPLAY{uuid.uuid4().hex}ENDLATEX"
         # Wrap in a div with class for proper styling
-        content = match.group(1)
+        content = html.escape(match.group(1), quote=False)
         placeholders[placeholder] = f'<div class="katex-display-wrapper">$${content}$$</div>'
         return placeholder
 
@@ -178,7 +280,7 @@ def _protect_latex(text: str) -> tuple[str, dict]:
     # Protect inline math ($...$) - but not $$ which we already handled
     def replace_inline(match):
         placeholder = f"LATEXINLINE{uuid.uuid4().hex}ENDLATEX"
-        content = match.group(1)
+        content = html.escape(match.group(1), quote=False)
         placeholders[placeholder] = f"${content}$"
         return placeholder
 
@@ -389,16 +491,33 @@ def _parse_subsections(markdown_text: str) -> list[dict]:
 
     with _render_lock:
         _render_cache[cache_key] = subsections
+        while len(_render_cache) > _RENDER_CACHE_MAX_ENTRIES:
+            del _render_cache[next(iter(_render_cache))]
 
     return subsections
 
 
-def _get_context_base() -> dict:
-    """Get base context with chapters list."""
-    return {
+def _json_for_script(value) -> str:
+    """
+    JSON for embedding in a <script> element (the templates mark it |safe).
+    Escapes <, > and & so text in the data, e.g. a page whose HTML contains
+    "</script>" or "<!--", cannot end the script element or change how the
+    browser parses it (what Django's json_script filter does).
+    """
+    return json.dumps(value).replace("<", "\\u003C").replace(">", "\\u003E").replace("&", "\\u0026")
+
+
+def _get_context_base(preview: dict | None = None) -> dict:
+    """Get base context with chapters list (plus the PR preview, if in one)."""
+    context = {
         "chapters": get_all_chapters(),
         "render_version": _RENDER_VERSION,
     }
+    if preview is not None:
+        context["preview"] = preview
+        # Prefix for in-site links, so navigation stays inside the preview.
+        context["base_path"] = preview["base_path"]
+    return context
 
 
 # Redirects for old chapter1 alignment science URLs (moved to chapter4)
@@ -422,6 +541,32 @@ def legacy_section_redirect(request, section_id: str, subsection_id: str | None 
     if subsection_id:
         base += f"{subsection_id}/"
     return redirect(base, permanent=True)
+
+
+# Redirects for subsections of sections that were split into a group of child sections, keyed by
+# (chapter_id, old section_id), then old subsection_id -> "new_section_id/new_subsection_id". The
+# old section_id is now the group's id, so a bare /chapter/section/ URL still serves its landing page.
+SPLIT_SECTION_REDIRECTS = {
+    ("chapter0_fundamentals", "05_vaes_gans"): {
+        "1-autoencoders-vaes": "51_vaes/1-autoencoders-vaes",
+        "2-gans": "52_gans/1-gans",
+        "3-bonus-transposed-convolutions": "51_vaes/bonus-transposed-convolutions",
+    },
+    # 2.2 was one merged page from 2026-02-23 to 2026-09-01
+    ("chapter2_rl", "02_dqn_vpg"): {
+        "1-deep-q-learning": "21_dqn/1-q-network-replay-buffer",
+        "2-vpg": "22_vpg/1-policy-gradient-theorem",
+    },
+}
+
+
+def split_section_redirect(request, chapter_id: str, section_id: str, subsection_id: str):
+    """Redirect an old subsection URL of a split section to the child section that now holds it."""
+    new_path = SPLIT_SECTION_REDIRECTS[(chapter_id, section_id)].get(subsection_id)
+    if new_path is None:
+        # "intro", or unknown - redirect to the group's landing page
+        return redirect(f"/{chapter_id}/{section_id}/", permanent=True)
+    return redirect(f"/{chapter_id}/{new_path}/", permanent=True)
 
 
 def custom_404(request, exception):
@@ -474,25 +619,35 @@ def setup(request):
 def planner_view(request):
     """Planner page - interactive week-by-week course schedule builder."""
     context = _get_context_base()
-    context["chapters_json"] = json.dumps(context["chapters"])
+    context["chapters_json"] = _json_for_script(context["chapters"])
     return render(request, "planner.html", context)
 
 
 @require_GET
 @cache_control(public=True, max_age=300)
-def chapter_view(request, chapter_id: str, section_id: str | None = None, subsection_id: str | None = None):
+def chapter_view(
+    request,
+    chapter_id: str,
+    section_id: str | None = None,
+    subsection_id: str | None = None,
+    pr: int | None = None,
+):
     """
     Main chapter view - handles full page loads.
     Renders the chapter template with initial section content.
     JavaScript handles subsequent navigation within the chapter.
+
+    With `pr` set (the /pr-preview/pr-<N>/ routes) the same page is rendered
+    from that PR's preview content instead of main.
     """
+    preview = _get_preview(pr) if pr is not None else None
     chapter = get_chapter(chapter_id)
     if not chapter:
         raise Http404("Chapter not found")
 
     # If no section specified, show chapter overview
     if not section_id:
-        context = _get_context_base()
+        context = _get_context_base(preview)
         context.update(
             {
                 "chapter": {"id": chapter_id, **chapter},
@@ -501,7 +656,7 @@ def chapter_view(request, chapter_id: str, section_id: str | None = None, subsec
                 "current_subsection": None,
                 "content": None,
                 "subsections": None,
-                "chapter_json": json.dumps({"id": chapter_id, **chapter}),
+                "chapter_json": _json_for_script({"id": chapter_id, **chapter}),
             }
         )
         return render(request, "chapter.html", context)
@@ -518,7 +673,7 @@ def chapter_view(request, chapter_id: str, section_id: str | None = None, subsec
             text = _read_local_content(section["local_path"])
         else:
             logger.info("Fetching content for '%s': %s", section_id, section["path"])
-            text = _fetch_content(section["path"])
+            text = _fetch_content(section["path"], preview)
         logger.info("Content loaded for '%s' (%d chars)", section_id, len(text))
         subsections = _parse_subsections(text)
     except Http404 as e:
@@ -554,7 +709,7 @@ def chapter_view(request, chapter_id: str, section_id: str | None = None, subsec
         (s for s in subsections if s["id"] == current_subsection), subsections[0] if subsections else None
     )
 
-    context = _get_context_base()
+    context = _get_context_base(preview)
     context.update(
         {
             "chapter": {"id": chapter_id, **chapter},
@@ -565,8 +720,8 @@ def chapter_view(request, chapter_id: str, section_id: str | None = None, subsec
             "subsections": subsections,
             "current_subsection_data": current_subsection_data,
             # Pass data to JavaScript for client-side navigation
-            "chapter_json": json.dumps({"id": chapter_id, **chapter}),
-            "subsections_json": json.dumps(subsections),
+            "chapter_json": _json_for_script({"id": chapter_id, **chapter}),
+            "subsections_json": _json_for_script(subsections),
         }
     )
     return render(request, "chapter.html", context)
@@ -574,11 +729,27 @@ def chapter_view(request, chapter_id: str, section_id: str | None = None, subsec
 
 @require_GET
 @cache_control(public=True, max_age=300)
-def section_api(request, chapter_id: str, section_id: str):
+def preview_index(request, pr: int):
+    """Landing page of a PR preview: links to the pages the PR changes."""
+    preview = _get_preview(pr)
+    changed = []
+    for chapter in get_all_chapters():
+        for section in chapter["sections"]:
+            if section.get("path") in preview["pages"]:
+                changed.append({"chapter": chapter, "section": section})
+    context = _get_context_base(preview)
+    context["changed_sections"] = changed
+    return render(request, "preview_index.html", context)
+
+
+@require_GET
+@cache_control(public=True, max_age=300)
+def section_api(request, chapter_id: str, section_id: str, pr: int | None = None):
     """
     API endpoint to fetch section content as JSON.
     Used by JavaScript for client-side navigation.
     """
+    preview = _get_preview(pr) if pr is not None else None
     chapter = get_chapter(chapter_id)
     if not chapter:
         return JsonResponse({"error": "Chapter not found"}, status=404)
@@ -599,7 +770,7 @@ def section_api(request, chapter_id: str, section_id: str):
                 logger.warning("API: No 'path' key in section: %s", section)
                 raise Http404(f"No path configured for section {section_id}")
             logger.info("API: Fetching content for '%s': %s", section_id, path)
-            text = _fetch_content(path)
+            text = _fetch_content(path, preview)
         logger.info("API: Content loaded for '%s' (%d chars)", section_id, len(text))
         subsections = _parse_subsections(text)
     except Http404 as e:
@@ -639,9 +810,24 @@ def section_api(request, chapter_id: str, section_id: str):
 @cache_control(public=True, max_age=300)
 def raw_content_api(request, file_path: str):
     """
-    Serve raw file content: local ARENA_3.0 first, then GitHub.
+    Serve raw file content: local ARENA_materials first, then GitHub.
     Used by client-side JS for downloading/copying context.
+
+    Only the files config.yaml names (each section's `path` and `python_path`,
+    which is all the JS asks for) are served. Anything else would be an
+    arbitrary-file read: `_try_read_local_arena` joins the path onto a local
+    directory (an absolute path or `..` escapes it), and the GitHub fallback
+    sends GH_TOKEN to wherever `../` in the URL leads on raw.githubusercontent.com.
     """
+    allowed = {
+        section[key]
+        for chapter in get_all_chapters()
+        for section in chapter["sections"]
+        for key in ("path", "python_path")
+        if section.get(key)
+    }
+    if file_path not in allowed:
+        return HttpResponse("Not found", status=404, content_type="text/plain")
     try:
         text = _fetch_content(file_path)
         return HttpResponse(text, content_type="text/plain; charset=utf-8")
@@ -649,6 +835,14 @@ def raw_content_api(request, file_path: str):
         return HttpResponse("Not found", status=404, content_type="text/plain")
     except requests.RequestException as e:
         return HttpResponse(f"Error: {e}", status=502, content_type="text/plain")
+
+
+def _json_object(body: bytes) -> dict:
+    """Parse a request body that must be a JSON object; anything else is "Invalid JSON" (400)."""
+    data = json.loads(body)
+    if not isinstance(data, dict):
+        raise json.JSONDecodeError("Expected a JSON object", "", 0)
+    return data
 
 
 @csrf_exempt
@@ -660,11 +854,13 @@ def token_count_api(request):
     Returns token count.
     """
     try:
-        data = json.loads(request.body)
+        data = _json_object(request.body)
         text = data.get("text", "")
 
         if not text:
             return JsonResponse({"tokens": 0})
+        if not isinstance(text, str):
+            return JsonResponse({"error": "'text' must be a string"}, status=400)
 
         # Use allowed_special="all" to handle markdown content that may contain
         # sequences resembling special tokens (e.g., <|endoftext|>)
@@ -689,6 +885,13 @@ Response style:
 - Reference specific line numbers or function names from the context when relevant
 
 {context_section}"""
+
+# Models the chat endpoint is permitted to call. This is the single source of
+# truth: the model <select> in base.html is rendered from it via
+# pages.context_processors.chat_models, so adding a model here adds it to the
+# dropdown too.
+ALLOWED_CHAT_MODELS = ("gpt-5.6-luna", "gpt-4.1-mini", "gpt-4o-mini")
+DEFAULT_CHAT_MODEL = "gpt-5.6-luna"
 
 
 CHAT_MODEL_REASONING_EFFORTS = {
@@ -783,16 +986,38 @@ def chat_api(request):
     Accepts JSON body with:
     - messages: list of {role, content} message objects
     - context: optional context string to include in system prompt
-    - model: model to use (default: gpt-5.6-luna)
+    - model: model to use (must be one of ALLOWED_CHAT_MODELS)
     """
     try:
-        data = json.loads(request.body)
+        data = _json_object(request.body)
         messages = data.get("messages", [])
         context = data.get("context", "")
-        model = data.get("model", "gpt-5.6-luna")
+        model = data.get("model", DEFAULT_CHAT_MODEL)
 
         if not messages:
             return JsonResponse({"error": "No messages provided"}, status=400)
+
+        if model not in ALLOWED_CHAT_MODELS:
+            return JsonResponse(
+                {"error": f"Unsupported model. Allowed models: {', '.join(ALLOWED_CHAT_MODELS)}"},
+                status=400,
+            )
+
+        # The browser only ever sends its own user/assistant turns. Reject anything
+        # else (a "system" turn, a non-list, non-string content) with a 400 rather
+        # than forwarding it to OpenAI.
+        if not isinstance(messages, list) or not all(
+            isinstance(m, dict)
+            and set(m) == {"role", "content"}
+            and m["role"] in ("user", "assistant")
+            and isinstance(m["content"], str)
+            for m in messages
+        ):
+            return JsonResponse(
+                {"error": "'messages' must be a list of {role: user|assistant, content: string}"}, status=400
+            )
+        if not isinstance(context, str):
+            return JsonResponse({"error": "'context' must be a string"}, status=400)
 
         # Build system prompt with context
         if context:
@@ -905,7 +1130,7 @@ SECTION_PAPERS = {
     ],
     "5_investigator_agents": [  # 4.5 Investigator Agents
         {"arxiv": "2502.01236", "title": "Eliciting Language Model Behaviours with Investigator Agents"},
-        {"local": "petri_blog_post", "title": "Petri (blog post)"},
+        {"local": "petri_blog_post.txt", "title": "Petri (blog post)"},
     ],
 }
 
@@ -942,11 +1167,13 @@ def download_papers_api(request):
     - section_ids: list of section IDs to get papers for
     """
     try:
-        data = json.loads(request.body)
+        data = _json_object(request.body)
         section_ids = data.get("section_ids", [])
 
         if not section_ids:
             return JsonResponse({"error": "No sections provided"}, status=400)
+        if not isinstance(section_ids, list) or not all(isinstance(s, str) for s in section_ids):
+            return JsonResponse({"error": "'section_ids' must be a list of strings"}, status=400)
 
         # Collect unique papers across all sections
         papers_to_fetch = {}  # Use dict to deduplicate by arxiv ID or filename

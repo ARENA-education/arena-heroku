@@ -306,7 +306,10 @@
         // Parse chapter data
         try {
             currentChapter = JSON.parse(chapterData.textContent);
-            const path = window.location.pathname;
+            // Strip the PR-preview prefix (/pr-preview/pr-<N>), as chapter-nav.js does
+            const basePath = window.ARENA_BASE_PATH || '';
+            let path = window.location.pathname;
+            if (basePath && path.startsWith(basePath)) path = path.slice(basePath.length);
             const parts = path.split('/').filter(p => p);
 
             if (parts.length >= 2) {
@@ -926,6 +929,15 @@ ${file.content}
     }
 
     /**
+     * The model values offered by the dropdown, which base.html renders from the
+     * server-side allowlist (ALLOWED_CHAT_MODELS in pages/views.py).
+     */
+    function getAllowedModels() {
+        if (!chatModelSelect) return [];
+        return Array.from(chatModelSelect.options).map(option => option.value);
+    }
+
+    /**
      * Send a chat message
      */
     async function sendMessage() {
@@ -971,9 +983,17 @@ ${file.content}
         }, 300);
 
         try {
+            // The dropdown is rendered from the server's allowlist, so its options
+            // are the set of models the API will accept.
+            const allowedModels = getAllowedModels();
+            const model = chatModelSelect?.value;
+
+            if (!model || !allowedModels.includes(model)) {
+                throw new Error(`Unsupported model "${model || 'none'}". Allowed models: ${allowedModels.join(', ')}`);
+            }
+
             // Build context from selected sections
             const context = await buildChatContext();
-            const model = chatModelSelect?.value || 'gpt-5.6-luna';
 
             // Prepare messages for API
             const messages = chatHistory.map(msg => ({

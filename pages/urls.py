@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    SPLIT_SECTION_REDIRECTS,
     chapter_view,
     chat_api,
     download_papers_api,
@@ -8,9 +9,11 @@ from .views import (
     home,
     legacy_section_redirect,
     planner_view,
+    preview_index,
     raw_content_api,
     section_api,
     setup,
+    split_section_redirect,
     static_context_api,
     token_count_api,
     version_view,
@@ -54,6 +57,31 @@ for _old_id in _OLD_SECTION_IDS:
     urlpatterns.append(
         path(f"chapter1_transformer_interp/{_old_id}/<str:subsection_id>/", legacy_section_redirect, {"section_id": _old_id}, name=f"redirect_{_old_id}_sub")
     )
+
+# Redirects for old subsection URLs of sections that were split into a group (e.g. 0.5 -> 0.5.1 / 0.5.2)
+for _chapter_id, _section_id in SPLIT_SECTION_REDIRECTS:
+    urlpatterns.append(
+        path(
+            f"{_chapter_id}/{_section_id}/<str:subsection_id>/",
+            split_section_redirect,
+            {"chapter_id": _chapter_id, "section_id": _section_id},
+            name=f"redirect_split_{_section_id}",
+        )
+    )
+
+# Per-PR previews: the same chapter pages, rendered from the content repo's
+# `pr-preview` branch instead of main. See docs/PR-PREVIEWS.md.
+urlpatterns += [
+    path("pr-preview/pr-<int:pr>/", preview_index, name="preview_index"),
+    path("pr-preview/pr-<int:pr>/api/<str:chapter_id>/<str:section_id>/", section_api, name="preview_section_api"),
+    path("pr-preview/pr-<int:pr>/<str:chapter_id>/", chapter_view, name="preview_chapter"),
+    path("pr-preview/pr-<int:pr>/<str:chapter_id>/<str:section_id>/", chapter_view, name="preview_section"),
+    path(
+        "pr-preview/pr-<int:pr>/<str:chapter_id>/<str:section_id>/<str:subsection_id>/",
+        chapter_view,
+        name="preview_subsection",
+    ),
+]
 
 urlpatterns += [
     # Chapter overview (no section selected)
