@@ -890,8 +890,13 @@ Response style:
 # truth: the model <select> in base.html is rendered from it via
 # pages.context_processors.chat_models, so adding a model here adds it to the
 # dropdown too.
-ALLOWED_CHAT_MODELS = ("gpt-4.1-mini", "gpt-4o-mini")
-DEFAULT_CHAT_MODEL = "gpt-4.1-mini"
+ALLOWED_CHAT_MODELS = ("gpt-5.6-luna", "gpt-4.1-mini", "gpt-4o-mini")
+DEFAULT_CHAT_MODEL = "gpt-5.6-luna"
+
+
+CHAT_MODEL_REASONING_EFFORTS = {
+    "gpt-5.6-luna": "medium",
+}
 
 
 def _stream_chat_response(messages: list, model: str):
@@ -904,11 +909,16 @@ def _stream_chat_response(messages: list, model: str):
     try:
         client = OpenAI(api_key=api_key)
 
-        stream = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            stream=True,
-        )
+        request = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+        }
+        reasoning_effort = CHAT_MODEL_REASONING_EFFORTS.get(model)
+        if reasoning_effort:
+            request["reasoning_effort"] = reasoning_effort
+
+        stream = client.chat.completions.create(**request)
 
         for chunk in stream:
             if chunk.choices[0].delta.content:
