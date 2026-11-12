@@ -15,6 +15,7 @@ from .views import (
     setup,
     split_section_redirect,
     static_context_api,
+    system_requirements,
     token_count_api,
     version_view,
 )
@@ -35,6 +36,7 @@ urlpatterns = [
     path("planner/", planner_view, name="planner"),
     path("setup/", setup, name="setup"),
     path("faq/", faq, name="faq"),
+    path("system-requirements/", system_requirements, name="system_requirements"),
     # API endpoint for fetching section content (used by JavaScript)
     path("api/<str:chapter_id>/<str:section_id>/", section_api, name="section_api"),
     # API endpoint for token counting
