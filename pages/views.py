@@ -48,7 +48,10 @@ SUBSECTION_DELIMITER = "=== NEW CHAPTER ==="
 # entries from a previous code version are automatically invalidated.
 _RENDER_VERSION = "2026-11-05-v4-latex-html-escape"
 
-# Render cache: sha256(version + raw_text) -> parsed subsections list
+# Render cache: sha256(version + raw_text) -> parsed subsections list. Bounded:
+# every edit to a page (and every PR preview) adds a new key, and nothing else
+# ever removes the old ones. Oldest-inserted entries are evicted first.
+_RENDER_CACHE_MAX_ENTRIES = 100  # ~0.4 MB of HTML each; the live site uses ~45
 _render_cache: dict[str, list[dict]] = {}
 _render_lock = threading.Lock()
 
@@ -122,14 +125,21 @@ def _get_preview(pr: int) -> dict:
         manifest = json.loads(_fetch_text(_preview_raw_url(pr, "preview.json")))
     except (requests.RequestException, ValueError) as exc:
         raise Http404(f"No preview for PR #{pr}") from exc
+    if not isinstance(manifest, dict):
+        raise Http404(f"Malformed preview manifest for PR #{pr}")
+
+    def str_list(key: str) -> list[str]:
+        value = manifest.get(key)
+        return [str(p) for p in value] if isinstance(value, list) else []
+
     owner = os.environ.get("GH_OWNER", "ARENA-education")
     repo = os.environ.get("GH_REPO", "ARENA_materials")
     return {
         "pr": pr,
         "title": str(manifest.get("title", "")),
         "head_sha": str(manifest.get("head_sha", "")),
-        "pages": [str(p) for p in manifest.get("pages", [])],
-        "notebooks": [str(p) for p in manifest.get("notebooks", [])],
+        "pages": str_list("pages"),
+        "notebooks": str_list("notebooks"),
         "base_path": f"/pr-preview/pr-{pr}",
         "pr_url": f"https://github.com/{owner}/{repo}/pull/{pr}",
     }
@@ -255,16 +265,18 @@ def _protect_latex(text: str) -> tuple[str, dict]:
     """
     Protect LaTeX blocks from markdown processing by replacing with placeholders.
     Returns the modified text and a dict mapping placeholders to original LaTeX.
+
+    The LaTeX is HTML-escaped when it is put back, so `<`, `>` and `&` reach the
+    page as text: unescaped, `x_{<t}` makes the browser start an HTML tag at `<t`,
+    which swallows the rest of the formula and the text after it. KaTeX reads the
+    page's text, so it still sees the original `<`.
     """
     placeholders = {}
 
     # Protect display math blocks ($$...$$) - these may span multiple lines
     def replace_display(match):
         placeholder = f"LATEXDISPLAY{uuid.uuid4().hex}ENDLATEX"
-        # Wrap in a div with class for proper styling. HTML-escape the math so
-        # the browser's HTML parser doesn't treat <, >, or & as markup; the
-        # browser decodes them back to literal chars in the text node before
-        # KaTeX auto-render reads it, so the LaTeX source is preserved.
+        # Wrap in a div with class for proper styling
         content = html.escape(match.group(1), quote=False)
         placeholders[placeholder] = f'<div class="katex-display-wrapper">$${content}$$</div>'
         return placeholder
@@ -274,8 +286,6 @@ def _protect_latex(text: str) -> tuple[str, dict]:
     # Protect inline math ($...$) - but not $$ which we already handled
     def replace_inline(match):
         placeholder = f"LATEXINLINE{uuid.uuid4().hex}ENDLATEX"
-        # HTML-escape so <, >, & survive the browser's HTML parser; KaTeX reads
-        # the decoded text node, so the original LaTeX is preserved (see above).
         content = html.escape(match.group(1), quote=False)
         placeholders[placeholder] = f"${content}$"
         return placeholder
@@ -487,8 +497,20 @@ def _parse_subsections(markdown_text: str) -> list[dict]:
 
     with _render_lock:
         _render_cache[cache_key] = subsections
+        while len(_render_cache) > _RENDER_CACHE_MAX_ENTRIES:
+            del _render_cache[next(iter(_render_cache))]
 
     return subsections
+
+
+def _json_for_script(value) -> str:
+    """
+    JSON for embedding in a <script> element (the templates mark it |safe).
+    Escapes <, > and & so text in the data, e.g. a page whose HTML contains
+    "</script>" or "<!--", cannot end the script element or change how the
+    browser parses it (what Django's json_script filter does).
+    """
+    return json.dumps(value).replace("<", "\\u003C").replace(">", "\\u003E").replace("&", "\\u0026")
 
 
 def _get_context_base(preview: dict | None = None) -> dict:
@@ -598,7 +620,7 @@ def setup(request):
 def planner_view(request):
     """Planner page - interactive week-by-week course schedule builder."""
     context = _get_context_base()
-    context["chapters_json"] = json.dumps(context["chapters"])
+    context["chapters_json"] = _json_for_script(context["chapters"])
     return render(request, "planner.html", context)
 
 
@@ -635,7 +657,7 @@ def chapter_view(
                 "current_subsection": None,
                 "content": None,
                 "subsections": None,
-                "chapter_json": json.dumps({"id": chapter_id, **chapter}),
+                "chapter_json": _json_for_script({"id": chapter_id, **chapter}),
             }
         )
         return render(request, "chapter.html", context)
@@ -699,8 +721,8 @@ def chapter_view(
             "subsections": subsections,
             "current_subsection_data": current_subsection_data,
             # Pass data to JavaScript for client-side navigation
-            "chapter_json": json.dumps({"id": chapter_id, **chapter}),
-            "subsections_json": json.dumps(subsections),
+            "chapter_json": _json_for_script({"id": chapter_id, **chapter}),
+            "subsections_json": _json_for_script(subsections),
         }
     )
     return render(request, "chapter.html", context)
@@ -791,7 +813,22 @@ def raw_content_api(request, file_path: str):
     """
     Serve raw file content: local ARENA_materials first, then GitHub.
     Used by client-side JS for downloading/copying context.
+
+    Only the files config.yaml names (each section's `path` and `python_path`,
+    which is all the JS asks for) are served. Anything else would be an
+    arbitrary-file read: `_try_read_local_arena` joins the path onto a local
+    directory (an absolute path or `..` escapes it), and the GitHub fallback
+    sends GH_TOKEN to wherever `../` in the URL leads on raw.githubusercontent.com.
     """
+    allowed = {
+        section[key]
+        for chapter in get_all_chapters()
+        for section in chapter["sections"]
+        for key in ("path", "python_path")
+        if section.get(key)
+    }
+    if file_path not in allowed:
+        return HttpResponse("Not found", status=404, content_type="text/plain")
     try:
         text = _fetch_content(file_path)
         return HttpResponse(text, content_type="text/plain; charset=utf-8")
@@ -799,6 +836,14 @@ def raw_content_api(request, file_path: str):
         return HttpResponse("Not found", status=404, content_type="text/plain")
     except requests.RequestException as e:
         return HttpResponse(f"Error: {e}", status=502, content_type="text/plain")
+
+
+def _json_object(body: bytes) -> dict:
+    """Parse a request body that must be a JSON object; anything else is "Invalid JSON" (400)."""
+    data = json.loads(body)
+    if not isinstance(data, dict):
+        raise json.JSONDecodeError("Expected a JSON object", "", 0)
+    return data
 
 
 @csrf_exempt
@@ -810,11 +855,13 @@ def token_count_api(request):
     Returns token count.
     """
     try:
-        data = json.loads(request.body)
+        data = _json_object(request.body)
         text = data.get("text", "")
 
         if not text:
             return JsonResponse({"tokens": 0})
+        if not isinstance(text, str):
+            return JsonResponse({"error": "'text' must be a string"}, status=400)
 
         # Use allowed_special="all" to handle markdown content that may contain
         # sequences resembling special tokens (e.g., <|endoftext|>)
@@ -933,7 +980,7 @@ def chat_api(request):
     - model: model to use (must be one of ALLOWED_CHAT_MODELS)
     """
     try:
-        data = json.loads(request.body)
+        data = _json_object(request.body)
         messages = data.get("messages", [])
         context = data.get("context", "")
         model = data.get("model", DEFAULT_CHAT_MODEL)
@@ -946,6 +993,22 @@ def chat_api(request):
                 {"error": f"Unsupported model. Allowed models: {', '.join(ALLOWED_CHAT_MODELS)}"},
                 status=400,
             )
+
+        # The browser only ever sends its own user/assistant turns. Reject anything
+        # else (a "system" turn, a non-list, non-string content) with a 400 rather
+        # than forwarding it to OpenAI.
+        if not isinstance(messages, list) or not all(
+            isinstance(m, dict)
+            and set(m) == {"role", "content"}
+            and m["role"] in ("user", "assistant")
+            and isinstance(m["content"], str)
+            for m in messages
+        ):
+            return JsonResponse(
+                {"error": "'messages' must be a list of {role: user|assistant, content: string}"}, status=400
+            )
+        if not isinstance(context, str):
+            return JsonResponse({"error": "'context' must be a string"}, status=400)
 
         # Build system prompt with context
         if context:
@@ -1058,7 +1121,7 @@ SECTION_PAPERS = {
     ],
     "5_investigator_agents": [  # 4.5 Investigator Agents
         {"arxiv": "2502.01236", "title": "Eliciting Language Model Behaviours with Investigator Agents"},
-        {"local": "petri_blog_post", "title": "Petri (blog post)"},
+        {"local": "petri_blog_post.txt", "title": "Petri (blog post)"},
     ],
 }
 
@@ -1095,11 +1158,13 @@ def download_papers_api(request):
     - section_ids: list of section IDs to get papers for
     """
     try:
-        data = json.loads(request.body)
+        data = _json_object(request.body)
         section_ids = data.get("section_ids", [])
 
         if not section_ids:
             return JsonResponse({"error": "No sections provided"}, status=400)
+        if not isinstance(section_ids, list) or not all(isinstance(s, str) for s in section_ids):
+            return JsonResponse({"error": "'section_ids' must be a list of strings"}, status=400)
 
         # Collect unique papers across all sections
         papers_to_fetch = {}  # Use dict to deduplicate by arxiv ID or filename
