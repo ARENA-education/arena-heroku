@@ -197,17 +197,32 @@ class ListAfterParagraphTests(SimpleTestCase):
         self.assertIn("<li>one</li>", out)
 
     def test_wrapped_list_item_is_left_alone(self):
-        text = "* first item, which wraps\nonto a second line\n* second item\n"
-        self.assertEqual(views._add_blank_line_before_lists(text), text)
+        out = self.render("* first item, which wraps\nonto a second line\n* second item\n")
+        self.assertEqual(out.count("<li>"), 2)
+        self.assertNotIn("<p>", out)
+
+    def test_nested_list_after_paragraph_in_item(self):
+        out = self.render("* item\n\n    more text\n    * sub\n")
+        self.assertIn("<li>sub</li>", out)
+
+    def test_ordered_list_not_starting_at_one_does_not_interrupt(self):
+        # CommonMark rule: wrapped prose like "...in\n2024. The next..." stays prose
+        self.assertNotIn("<ol>", self.render("This happened in\n2024. Then more.\n"))
 
     def test_code_maths_comments_and_pre_are_left_alone(self):
-        for text in [
-            "```\nx = 1\n- y\n```\n",
-            "$$\na\n- b\n$$\n",
-            "<!-- notes:\n* hidden\n-->\n",
-            "<pre>Rollouts: 100\n0. [setup] text\n</pre>\n",
+        for text, literal in [
+            ("```\nx = 1\n- y\n```\n", "- y"),
+            ("$$\na\n- b\n$$\n", "- b"),
+            ("<!-- notes:\n* hidden\n-->\n", "* hidden"),
+            ("<pre>Rollouts: 100\n1. [setup] text\n</pre>\n", "1. [setup] text"),
         ]:
-            self.assertEqual(views._add_blank_line_before_lists(text), text)
+            out = self.render(text)
+            self.assertNotIn("<li>", out)
+            self.assertIn(literal, out)
+
+    def test_list_after_paragraph_inside_dropdown(self):
+        out = self.render("<details>\n<summary>Hint</summary>\n\nSome notes:\n* first\n* second\n</details>\n")
+        self.assertIn("<li>first</li>", out)
 
 
 @override_settings(STORAGES=PLAIN_STATIC)
