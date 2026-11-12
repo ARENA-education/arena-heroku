@@ -46,7 +46,7 @@ SUBSECTION_DELIMITER = "=== NEW CHAPTER ==="
 
 # Bump this string whenever _render_markdown logic changes so that cached
 # entries from a previous code version are automatically invalidated.
-_RENDER_VERSION = "2026-11-05-v4-latex-html-escape"
+_RENDER_VERSION = "2026-11-12-v5-stable-latex-placeholders-html-escape"
 
 # Render cache: sha256(version + raw_text) -> parsed subsections list. Bounded:
 # every edit to a page (and every PR preview) adds a new key, and nothing else
@@ -199,6 +199,25 @@ def _fetch_content(md_path: str, preview: dict | None = None) -> str:
     return _fetch_text(_raw_url(md_path))
 
 
+def _mark_changed_subsections(subsections: list[dict], section: dict, preview: dict | None) -> list[dict]:
+    """
+    In a PR preview, flag each subsection whose rendered HTML differs from
+    main's (`changed`), so the sidebar can tint it. Main's text gets the same
+    Colab-link rewrite first, so only the PR's own edits count. A section the
+    PR did not regenerate is unchanged throughout; a subsection main lacks is
+    changed. Returns copies: `subsections` may be the render cache's own list.
+    """
+    if preview is None or section.get("path") not in preview["pages"]:
+        return subsections
+    try:
+        main = _parse_subsections(_preview_colab_links(_fetch_content(section["path"]), preview))
+    except (Http404, requests.RequestException) as e:
+        logger.warning("Preview: could not load main's '%s' to compare: %s", section["path"], e)
+        main = []
+    main_html = {s["id"]: s["html"] for s in main}
+    return [{**s, "changed": main_html.get(s["id"]) != s["html"]} for s in subsections]
+
+
 def _read_local_content(filename: str) -> str:
     """Read markdown content from local content directory."""
     filepath = CONTENT_DIR / filename
@@ -266,6 +285,12 @@ def _protect_latex(text: str) -> tuple[str, dict]:
     Protect LaTeX blocks from markdown processing by replacing with placeholders.
     Returns the modified text and a dict mapping placeholders to original LaTeX.
 
+    A placeholder is a hash of its LaTeX, not a random token: one inside a
+    heading ends up in that heading's anchor id (the toc extension slugifies
+    the text before the LaTeX is restored), so a random one would change the
+    id on every render, breaking deep links and making identical pages render
+    differently (PR previews compare main's render with the PR's).
+
     The LaTeX is HTML-escaped when it is put back, so `<`, `>` and `&` reach the
     page as text: unescaped, `x_{<t}` makes the browser start an HTML tag at `<t`,
     which swallows the rest of the formula and the text after it. KaTeX reads the
@@ -275,7 +300,7 @@ def _protect_latex(text: str) -> tuple[str, dict]:
 
     # Protect display math blocks ($$...$$) - these may span multiple lines
     def replace_display(match):
-        placeholder = f"LATEXDISPLAY{uuid.uuid4().hex}ENDLATEX"
+        placeholder = f"LATEXDISPLAY{hashlib.sha256(match.group(0).encode()).hexdigest()[:32]}ENDLATEX"
         # Wrap in a div with class for proper styling
         content = html.escape(match.group(1), quote=False)
         placeholders[placeholder] = f'<div class="katex-display-wrapper">$${content}$$</div>'
@@ -285,7 +310,7 @@ def _protect_latex(text: str) -> tuple[str, dict]:
 
     # Protect inline math ($...$) - but not $$ which we already handled
     def replace_inline(match):
-        placeholder = f"LATEXINLINE{uuid.uuid4().hex}ENDLATEX"
+        placeholder = f"LATEXINLINE{hashlib.sha256(match.group(0).encode()).hexdigest()[:32]}ENDLATEX"
         content = html.escape(match.group(1), quote=False)
         placeholders[placeholder] = f"${content}$"
         return placeholder
@@ -682,6 +707,7 @@ def chapter_view(
             text = _fetch_content(section["path"], preview)
         logger.info("Content loaded for '%s' (%d chars)", section_id, len(text))
         subsections = _parse_subsections(text)
+        subsections = _mark_changed_subsections(subsections, section, preview)
     except Http404 as e:
         url = section.get("local_path") or section.get("path", "")
         logger.warning("Content not found for section '%s' (%s): %s", section_id, url, e)
@@ -779,6 +805,7 @@ def section_api(request, chapter_id: str, section_id: str, pr: int | None = None
             text = _fetch_content(path, preview)
         logger.info("API: Content loaded for '%s' (%d chars)", section_id, len(text))
         subsections = _parse_subsections(text)
+        subsections = _mark_changed_subsections(subsections, section, preview)
     except Http404 as e:
         url = section.get("local_path") or section.get("path", "")
         logger.warning("API: Content not found for section '%s' (%s): %s", section_id, url, e)
