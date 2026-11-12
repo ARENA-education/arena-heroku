@@ -265,16 +265,18 @@ def _protect_latex(text: str) -> tuple[str, dict]:
     """
     Protect LaTeX blocks from markdown processing by replacing with placeholders.
     Returns the modified text and a dict mapping placeholders to original LaTeX.
+
+    The LaTeX is HTML-escaped when it is put back, so `<`, `>` and `&` reach the
+    page as text: unescaped, `x_{<t}` makes the browser start an HTML tag at `<t`,
+    which swallows the rest of the formula and the text after it. KaTeX reads the
+    page's text, so it still sees the original `<`.
     """
     placeholders = {}
 
     # Protect display math blocks ($$...$$) - these may span multiple lines
     def replace_display(match):
         placeholder = f"LATEXDISPLAY{uuid.uuid4().hex}ENDLATEX"
-        # Wrap in a div with class for proper styling. HTML-escape the math so
-        # the browser's HTML parser doesn't treat <, >, or & as markup; the
-        # browser decodes them back to literal chars in the text node before
-        # KaTeX auto-render reads it, so the LaTeX source is preserved.
+        # Wrap in a div with class for proper styling
         content = html.escape(match.group(1), quote=False)
         placeholders[placeholder] = f'<div class="katex-display-wrapper">$${content}$$</div>'
         return placeholder
@@ -284,8 +286,6 @@ def _protect_latex(text: str) -> tuple[str, dict]:
     # Protect inline math ($...$) - but not $$ which we already handled
     def replace_inline(match):
         placeholder = f"LATEXINLINE{uuid.uuid4().hex}ENDLATEX"
-        # HTML-escape so <, >, & survive the browser's HTML parser; KaTeX reads
-        # the decoded text node, so the original LaTeX is preserved (see above).
         content = html.escape(match.group(1), quote=False)
         placeholders[placeholder] = f"${content}$"
         return placeholder
@@ -557,6 +557,11 @@ SPLIT_SECTION_REDIRECTS = {
         "1-autoencoders-vaes": "51_vaes/1-autoencoders-vaes",
         "2-gans": "52_gans/1-gans",
         "3-bonus-transposed-convolutions": "51_vaes/bonus-transposed-convolutions",
+    },
+    # 2.2 was one merged page from 2026-02-23 to 2026-09-01
+    ("chapter2_rl", "02_dqn_vpg"): {
+        "1-deep-q-learning": "21_dqn/1-q-network-replay-buffer",
+        "2-vpg": "22_vpg/1-policy-gradient-theorem",
     },
 }
 

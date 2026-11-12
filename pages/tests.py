@@ -333,6 +333,26 @@ class PrPreviewTests(SimpleTestCase):
             self.assertNotIn(marker, html)
 
 
+class LatexEscapingTests(SimpleTestCase):
+    """`<`, `>` and `&` in LaTeX must reach the page as text, not as HTML."""
+
+    def test_less_than_in_display_math_is_escaped(self):
+        html = views._render_markdown("$$\np(o_t \\mid o_{<t}) > 0\n$$\n\nAfter the formula.\n")
+        self.assertIn("o_{&lt;t}", html)
+        self.assertIn("&gt; 0", html)
+        self.assertNotIn("<t}", html)  # would start an HTML tag in the browser
+        self.assertIn("<p>After the formula.</p>", html)
+
+    def test_less_than_in_inline_math_is_escaped(self):
+        html = views._render_markdown("The tokens $x_{<t}$ come before $x_t$.\n")
+        self.assertIn("$x_{&lt;t}$", html)
+        self.assertNotIn("<t}", html)
+
+    def test_alignment_ampersands_are_escaped(self):
+        html = views._render_markdown("$$\n\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}\n$$\n")
+        self.assertIn("a &amp;= b", html)
+
+
 class SplitSectionRedirectTests(SimpleTestCase):
     def test_old_subsection_urls_go_to_the_child_section(self):
         response = self.client.get("/chapter0_fundamentals/05_vaes_gans/2-gans/")
@@ -343,6 +363,12 @@ class SplitSectionRedirectTests(SimpleTestCase):
         response = self.client.get("/chapter0_fundamentals/05_vaes_gans/intro/")
         self.assertEqual(response.status_code, 301)
         self.assertEqual(response["Location"], "/chapter0_fundamentals/05_vaes_gans/")
+
+    def test_old_merged_2_2_subsection_urls_go_to_dqn_and_vpg(self):
+        response = self.client.get("/chapter2_rl/02_dqn_vpg/1-deep-q-learning/")
+        self.assertEqual(response["Location"], "/chapter2_rl/21_dqn/1-q-network-replay-buffer/")
+        response = self.client.get("/chapter2_rl/02_dqn_vpg/2-vpg/")
+        self.assertEqual(response["Location"], "/chapter2_rl/22_vpg/1-policy-gradient-theorem/")
 
 
 class LocalArenaReadTests(SimpleTestCase):
