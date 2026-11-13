@@ -1,7 +1,9 @@
+import gzip
 import json
 import os
 import re
 import tempfile
+import zlib
 from pathlib import Path
 from unittest import mock
 
@@ -195,6 +197,42 @@ class JsonInScriptTests(SimpleTestCase):
         data = json.loads(html[start:end].split(">", 1)[1])
         self.assertIn("</script><script>alert(1)</script>", data[0]["html"])
         self.assertIn("\\u003C/script\\u003E", html[start:end])
+
+
+@mock.patch.object(views, "get_all_chapters", return_value=[{"id": "ch0", "section_count": 2, **CHAPTER}])
+class GzipTests(SimpleTestCase):
+    """Responses are gzipped for clients that accept it, and the chat stream still arrives piece by piece."""
+
+    @mock.patch.object(views, "_fetch_content", return_value="# Rays\n" + "Some text. " * 2000)
+    def test_page_is_gzipped(self, fetch, _):
+        resp = self.client.get("/api/raw/ch0/instructions/pages/01.md", HTTP_ACCEPT_ENCODING="gzip")
+        self.assertEqual(resp["Content-Encoding"], "gzip")
+        self.assertEqual(gzip.decompress(resp.content), fetch.return_value.encode())
+        self.assertLess(len(resp.content), len(fetch.return_value) // 10)
+        self.assertNotIn("Content-Encoding", self.client.get("/api/raw/ch0/instructions/pages/01.md"))
+
+    @mock.patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"})
+    def test_chat_stream_is_not_buffered(self, _):
+        chunks = []
+        for text in ("Hello", " there"):
+            chunk = mock.Mock()
+            chunk.choices = [mock.Mock()]
+            chunk.choices[0].delta.content = text
+            chunks.append(chunk)
+        client = mock.Mock()
+        client.chat.completions.create.return_value = iter(chunks)
+        with mock.patch.object(views, "OpenAI", return_value=client):
+            body = {"messages": [{"role": "user", "content": "hi"}], "model": views.DEFAULT_CHAT_MODEL}
+            resp = self.client.post(
+                "/api/chat/", data=json.dumps(body), content_type="application/json", HTTP_ACCEPT_ENCODING="gzip"
+            )
+            self.assertEqual(resp["Content-Encoding"], "gzip")
+            # Each model chunk can be decoded as soon as it arrives, before the stream ends
+            stream, unzip, seen = iter(resp.streaming_content), zlib.decompressobj(16 + zlib.MAX_WBITS), b""
+            for expected in (b"Hello", b"Hello there"):
+                while seen != expected:
+                    seen += unzip.decompress(next(stream))
+            self.assertEqual(seen + b"".join(unzip.decompress(c) for c in stream), b"Hello there")
 
 
 class JsonApiInputTests(SimpleTestCase):
