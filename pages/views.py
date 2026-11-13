@@ -322,13 +322,23 @@ def _protect_latex(text: str) -> tuple[str, dict]:
     return text, placeholders
 
 
+_LATEX_PLACEHOLDER = re.compile(r"LATEX(?:DISPLAY|INLINE)[0-9a-f]{32}ENDLATEX")
+# A <details> placeholder on its own line comes back wrapped in <p>, which is dropped.
+_DETAILS_PLACEHOLDER = re.compile(r"<p>(DETAILSBLOCK[0-9a-f]{32}END)</p>|(DETAILSBLOCK[0-9a-f]{32}END)")
+
+
 def _restore_latex(html_text: str, placeholders: dict) -> str:
-    """Restore LaTeX blocks from placeholders."""
-    for placeholder, latex in placeholders.items():
-        html_text = html_text.replace(placeholder, latex)
-        # Also handle case where markdown might have wrapped it in <p> tags
-        html_text = html_text.replace(f"<p>{placeholder}</p>", latex)
-    return html_text
+    """Restore LaTeX blocks from placeholders (one pass, so linear in the page size)."""
+    return _LATEX_PLACEHOLDER.sub(lambda m: placeholders.get(m.group(0), m.group(0)), html_text)
+
+
+def _restore_details(html_text: str, placeholders: dict) -> str:
+    """Restore pre-rendered <details> blocks from placeholders (one pass)."""
+
+    def fill(m: re.Match) -> str:
+        return placeholders.get(m.group(1) or m.group(2), m.group(0))
+
+    return _DETAILS_PLACEHOLDER.sub(fill, html_text)
 
 
 _DETAILS_TAG = re.compile(r"<(/?)details\b[^>]*>", re.IGNORECASE)
@@ -410,9 +420,7 @@ def _preprocess_details_blocks(text: str) -> tuple[str, dict]:
             },
         )
 
-        for nested_placeholder, nested_html in nested.items():
-            rendered_content = rendered_content.replace(f"<p>{nested_placeholder}</p>", nested_html)
-            rendered_content = rendered_content.replace(nested_placeholder, nested_html)
+        rendered_content = _restore_details(rendered_content, nested)
 
         details_html = f"{opening_tag}\n{summary_tag}\n{rendered_content}\n</details>"
         placeholder = f"DETAILSBLOCK{uuid.uuid4().hex}END"
@@ -469,9 +477,7 @@ def _render_markdown(text: str) -> str:
     )
 
     # Restore <details> blocks (before LaTeX so LaTeX inside details is restored too)
-    for placeholder, details_html in details_placeholders.items():
-        rendered = rendered.replace(f"<p>{placeholder}</p>", details_html)
-        rendered = rendered.replace(placeholder, details_html)
+    rendered = _restore_details(rendered, details_placeholders)
 
     # Restore LaTeX blocks
     rendered = _restore_latex(rendered, latex_placeholders)
