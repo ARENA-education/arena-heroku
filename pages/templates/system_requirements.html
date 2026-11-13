@@ -3,7 +3,7 @@
 {% block title %}System Requirements - ARENA{% endblock %}
 
 {% block content %}
-<div class="static-page-container">
+<div class="static-page-container sysreq-container">
   <div class="static-page-content markdown-content sysreq-page">
     <h1>System Requirements</h1>
     <p>
@@ -53,7 +53,7 @@
             <td class="sysreq-nw">{{ row.cells.runtime_gpu|default:"–" }}</td>
             <td>{{ row.cells.runtime_cpu|default:"–" }}</td>
             <td class="sysreq-colab" title="{{ row.cells.colab_note }}">{{ row.cells.colab }}</td>
-            <td class="sysreq-nw">{{ row.cells.download }}</td>
+            <td>{{ row.cells.download }}</td>
             <td class="sysreq-nw">{{ row.cells.ram|default:"–" }}</td>
             <td>{{ row.cells.keys }}</td>
           </tr>

@@ -3058,9 +3058,21 @@ details.sysreq-card[open] .sysreq-card-title::before {
     color: var(--color-text-secondary);
 }
 
+/* The table needs more room than a reading column; prose on the page keeps a readable width. */
+.static-page-container.sysreq-container { max-width: min(100%, 84rem); }
+.sysreq-container .markdown-content.sysreq-page { max-width: none; }
+.sysreq-page > p { max-width: 48rem; }
+
 .sysreq-wrap { overflow-x: auto; }
 .sysreq-page .sysreq-table { margin-top: 0; }
-.sysreq-table td, .sysreq-table th { vertical-align: top; }
+/* .markdown-content's word-break lets auto table layout squeeze columns to one letter wide */
+.sysreq-table td, .sysreq-table th { vertical-align: top; word-break: normal; overflow-wrap: normal; }
+.sysreq-table th { white-space: nowrap; }
+.sysreq-table tr.sysreq-row td:nth-child(1) { min-width: 12rem; }
+.sysreq-table tr.sysreq-row td:nth-child(2) { min-width: 11rem; }
+.sysreq-table tr.sysreq-row td:nth-child(4) { min-width: 9rem; }
+.sysreq-table tr.sysreq-row td:nth-child(6) { min-width: 7rem; }
+.sysreq-table tr.sysreq-row td:nth-child(8) { min-width: 9rem; }
 .sysreq-table tr.sysreq-chap td {
     background: var(--color-bg-tertiary);
     font-family: var(--font-heading);
@@ -3072,7 +3084,6 @@ details.sysreq-card[open] .sysreq-card-title::before {
 .sysreq-table tr.sysreq-row[aria-expanded="true"] td { background: var(--color-surface-hover); }
 .sysreq-table tr.sysreq-details td { background: var(--color-bg-secondary); }
 .sysreq-table tr.sysreq-details ul { margin: 0; }
-.sysreq-day { white-space: nowrap; }
 .sysreq-num { font-weight: 600; margin-right: 6px; }
 .sysreq-nw { white-space: nowrap; }
 .sysreq-colab { text-align: center; font-size: 1.1em; }
