@@ -3088,3 +3088,5 @@ details.sysreq-card[open] .sysreq-card-title::before {
 .sysreq-nw { white-space: nowrap; }
 .sysreq-colab { text-align: center; font-size: 1.1em; }
 .sysreq-empty { color: var(--color-text-secondary); }
+/* inline code in the card wraps at line ends, not mid-word (unless a name is longer than the line) */
+.sysreq-card code { word-break: normal; overflow-wrap: break-word; }
