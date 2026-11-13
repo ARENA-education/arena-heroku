@@ -179,6 +179,54 @@ class RenderCacheTests(SimpleTestCase):
         self.assertIs(views._parse_subsections(last), views._parse_subsections(last))
 
 
+
+class ListAfterParagraphTests(SimpleTestCase):
+    """Lists written CommonMark-style, with no blank line after the paragraph, still render."""
+
+    def render(self, text):
+        return views._render_markdown(text)
+
+    def test_bullet_list_after_paragraph(self):
+        out = self.render("Some notes:\n* first\n* second\n")
+        self.assertIn("<p>Some notes:</p>", out)
+        self.assertIn("<li>first</li>", out)
+
+    def test_numbered_list_after_paragraph(self):
+        self.assertIn("<ol>", self.render("Steps:\n1. one\n2. two\n"))
+
+    def test_list_after_paragraph_in_blockquote(self):
+        out = self.render("> Scorers take these forms:\n> 1. one\n> 2. two\n")
+        self.assertIn("<li>one</li>", out)
+
+    def test_wrapped_list_item_is_left_alone(self):
+        out = self.render("* first item, which wraps\nonto a second line\n* second item\n")
+        self.assertEqual(out.count("<li>"), 2)
+        self.assertNotIn("<p>", out)
+
+    def test_nested_list_after_paragraph_in_item(self):
+        out = self.render("* item\n\n    more text\n    * sub\n")
+        self.assertIn("<li>sub</li>", out)
+
+    def test_ordered_list_not_starting_at_one_does_not_interrupt(self):
+        # CommonMark rule: wrapped prose like "...in\n2024. The next..." stays prose
+        self.assertNotIn("<ol>", self.render("This happened in\n2024. Then more.\n"))
+
+    def test_code_maths_comments_and_pre_are_left_alone(self):
+        for text, literal in [
+            ("```\nx = 1\n- y\n```\n", "- y"),
+            ("$$\na\n- b\n$$\n", "- b"),
+            ("<!-- notes:\n* hidden\n-->\n", "* hidden"),
+            ("<pre>Rollouts: 100\n1. [setup] text\n</pre>\n", "1. [setup] text"),
+        ]:
+            out = self.render(text)
+            self.assertNotIn("<li>", out)
+            self.assertIn(literal, out)
+
+    def test_list_after_paragraph_inside_dropdown(self):
+        out = self.render("<details>\n<summary>Hint</summary>\n\nSome notes:\n* first\n* second\n</details>\n")
+        self.assertIn("<li>first</li>", out)
+
+
 @override_settings(STORAGES=PLAIN_STATIC)
 @mock.patch.object(views, "_try_read_local_arena", return_value=None)
 @mock.patch.object(views, "get_all_chapters", return_value=[{"id": "ch0", "section_count": 2, **CHAPTER}])

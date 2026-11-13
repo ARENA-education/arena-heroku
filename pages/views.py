@@ -20,6 +20,8 @@ from django.shortcuts import redirect, render
 from django.views.decorators.cache import cache_control
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
+from markdown.blockprocessors import BlockProcessor
+from markdown.extensions import Extension
 from openai import OpenAI
 
 from .build_info import get_build_info
@@ -48,7 +50,7 @@ SUBSECTION_DELIMITER = "=== NEW CHAPTER ==="
 
 # Bump this string whenever _render_markdown logic changes so that cached
 # entries from a previous code version are automatically invalidated.
-_RENDER_VERSION = "2026-11-12-v5-stable-latex-placeholders-html-escape"
+_RENDER_VERSION = "2026-11-12-v7-list-interrupts-paragraph"
 
 # Render cache: sha256(version + raw_text) -> parsed subsections list. Bounded:
 # every edit to a page (and every PR preview) adds a new key, and nothing else
@@ -282,6 +284,40 @@ def _preprocess_exercise_blocks(text: str) -> str:
     return re.sub(pattern, replace_block, text, flags=re.MULTILINE)
 
 
+class _ListInterruptsParagraph(BlockProcessor):
+    """
+    Let a list start on the line straight after a paragraph, as in CommonMark.
+
+    GitHub, Jupyter and VS Code (where the material is written and previewed)
+    render "Some notes:\n* first point" as a paragraph then a list. Python-Markdown
+    needs a blank line first, and otherwise folds the items into the paragraph as
+    literal text. This runs just before the paragraph processor and splits the
+    block at the first list line. Fences, raw HTML and LaTeX are already stashed
+    by then, and blocks that start with a list item are taken by the list
+    processors, so neither needs handling here.
+    """
+
+    # CommonMark: any bullet, but only an ordered list starting at 1 may interrupt a paragraph
+    RE = re.compile(r"^ {0,3}(?:[*+-]|1\.) +\S", re.MULTILINE)
+
+    def test(self, parent, block):
+        m = self.RE.search(block)
+        return m is not None and m.start() > 0
+
+    def run(self, parent, blocks):
+        block = blocks.pop(0)
+        start = self.RE.search(block).start()
+        blocks[:0] = [block[:start].rstrip("\n"), block[start:]]
+
+
+class _CommonMarkListsExtension(Extension):
+    def extendMarkdown(self, md_instance):
+        # Priority 11: just above "paragraph" (10), below every other block processor
+        md_instance.parser.blockprocessors.register(
+            _ListInterruptsParagraph(md_instance.parser), "list_interrupts_paragraph", 11
+        )
+
+
 def _protect_latex(text: str) -> tuple[str, dict]:
     """
     Protect LaTeX blocks from markdown processing by replacing with placeholders.
@@ -410,7 +446,7 @@ def _preprocess_details_blocks(text: str) -> tuple[str, dict]:
         # headers inside <details> shouldn't appear in the page-level TOC)
         rendered_content = md.markdown(
             content,
-            extensions=["codehilite", "fenced_code", "tables", "md_in_html"],
+            extensions=["codehilite", "fenced_code", "tables", "md_in_html", _CommonMarkListsExtension()],
             extension_configs={
                 "codehilite": {
                     "css_class": "codehilite",
@@ -466,6 +502,7 @@ def _render_markdown(text: str) -> str:
             "tables",
             "toc",
             "md_in_html",
+            _CommonMarkListsExtension(),
         ],
         extension_configs={
             "codehilite": {
