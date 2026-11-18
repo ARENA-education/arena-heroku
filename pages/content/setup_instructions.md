@@ -92,14 +92,12 @@ cd ARENA_materials
 source .venv/bin/activate  # Windows (Git Bash): source .venv/Scripts/activate
 ```
 
-This creates a `.venv` with everything in `requirements.txt`, and writes an `arena.pth` file into it so that every notebook can `import arena_lib` (code shared across chapters). If you'd rather use your own environment, run this from the `ARENA_materials` folder instead:
+This creates a `.venv` with everything in `requirements.txt`, and installs `arena_lib` (code shared across chapters) into it so that every notebook can `import arena_lib`. If you'd rather use your own environment, run this from the `ARENA_materials` folder instead:
 
 ```bash
 pip install -r requirements.txt
-python -c "import os, sysconfig; open(os.path.join(sysconfig.get_paths()['purelib'], 'arena.pth'), 'w').write(os.getcwd() + '\n')"
+pip install -e .
 ```
-
-The path in `arena.pth` is absolute, so if you move the folder, run the second line again.
 
 <details>
 <summary>Tips for MacOS</summary>
@@ -418,7 +416,7 @@ git clone https://github.com/ARENA-education/ARENA_materials.git
 bash ARENA_materials/install.sh
 ```
 
-The install script also writes `arena.pth`, which lets every notebook `import arena_lib`.
+The install script also installs `arena_lib` (`pip install -e .`), which every notebook imports.
 
 Install the **Python** and **Jupyter** extensions (and optionally **Ruff** for autoformatting).
 
