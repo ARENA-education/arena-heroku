@@ -6,11 +6,11 @@
 
 There are 3 main ways to access the course:
 
-1. **Colab**. Each day of exercises has 2 Colab notebooks (linked at the top of the exercise page on this website). The "exercise Colab" leaves functions blank for you to fill in, and the "solution Colab" exists as a reference. This option doesn't rely on this website at all - the content is self-contained in the notebooks. *Recommended if you want to avoid environment setup.*
+1. **Colab**. Each day of exercises has 2 Colab notebooks (linked at the top of the exercise page on this website). The "exercise Colab" leaves functions blank for you to fill in, and the "solution Colab" exists as a reference. This option doesn't rely on this website at all - the content is self-contained in the notebooks. The first cells download the day's exercise files and install any packages Colab is missing. Days that call an API read their keys (e.g. `OPENROUTER_API_KEY`, `HF_TOKEN`) from Colab's **Secrets** (the key icon in the left sidebar); the [system requirements](/system-requirements/) page lists which keys each day needs. *Recommended if you want to avoid environment setup.*
 
-2. **VS Code (blank files)**. Clone the [ARENA repo](https://github.com/ARENA-education/ARENA_materials) and create a blank Python file in the exercise directory (e.g. `chapter0_fundamentals/exercises/part1_ray_tracing/answers.py`). Read through exercises on this website, copying code blocks and filling in solutions. Run chunks of code using `# %%` cell delimiters or VS Code's "Execute Selection" (`Shift+Enter`). *Strongly recommended for in-person ARENA participants.*
+2. **VS Code (blank files)**. Clone the [ARENA repo](https://github.com/ARENA-education/ARENA_materials), run its install script (see [VS Code setup](#vs-code-setup) below), and create a blank Python file in the exercise directory (e.g. `chapter0_fundamentals/exercises/part1_ray_tracing/answers.py`). Read through exercises on this website, copying code blocks and filling in solutions, starting with the day's **Setup code** (`import arena_lib` / `arena_lib.setup("0.1")`, then the imports). Run chunks of code using `# %%` cell delimiters or VS Code's "Execute Selection" (`Shift+Enter`). *Strongly recommended for in-person ARENA participants.*
 
-3. **VS Code (notebooks)**. Same as Colab, but working from the `.ipynb` files in the cloned repo. **Make a copy of the exercises notebook** before starting - otherwise pulling updates will overwrite your work.
+3. **VS Code (notebooks)**. Same as Colab, but working from the `.ipynb` files in the cloned repo, with the `arena-env` kernel that the install script sets up. **Make a copy of the exercises notebook** before starting - otherwise pulling updates will overwrite your work.
 
 **Important**: Don't mix notebook and website instructions! Each option is self-contained with slightly different setup code.
 
@@ -18,6 +18,7 @@ There are 3 main ways to access the course:
 
 ```
 .
+├── arena_lib                  # code shared across chapters (notebook setup, test and plotting helpers)
 ├── chapter0_fundamentals
 │   ├── exercises
 │   │   ├── part1_ray_tracing
@@ -33,6 +34,10 @@ There are 3 main ways to access the course:
 ├── chapter2_rl
 ├── chapter3_llm_evals
 ├── chapter4_alignment_science
+├── infrastructure             # master files the notebooks and these pages are generated from
+├── install.sh                 # setup for rented GPU machines (conda)
+├── install_uv.sh              # setup for your own machine, or a GPU machine (uv)
+├── pyproject.toml
 └── requirements.txt
 ```
 
@@ -66,6 +71,8 @@ Solutions appear in dropdowns below exercises. **Use hints liberally** - they're
 - **Storage**: 50GB should suffice.
 - **Bandwidth**: 100Mbps+ recommended for downloading models/datasets.
 
+The [system requirements](/system-requirements/) page lists, for each day, whether it needs a GPU, how much memory, and which API keys.
+
 <details>
 <summary>GPU comparison table (VastAI pricing)</summary>
 
@@ -83,19 +90,32 @@ Solutions appear in dropdowns below exercises. **Use hints liberally** - they're
 
 ### Local setup
 
-If your machine meets the requirements:
+If your machine meets the requirements, clone the repo and run its install script (on Windows, from Git Bash):
 
 ```bash
-conda create --name arena-env python=3.13
-conda activate arena-env
 git clone https://github.com/ARENA-education/ARENA_materials.git
 cd ARENA_materials
-pip install -r requirements.txt
+./install_uv.sh --platform local
+source .venv/bin/activate  # Windows (Git Bash): source .venv/Scripts/activate
 ```
+
+The script needs `git` and `curl`, and installs [uv](https://docs.astral.sh/uv/) if you don't have it. It creates a Python 3.13 environment in `ARENA_materials/.venv` with everything in `requirements.txt`, installs `arena_lib` (code shared across chapters) into it so that every notebook can `import arena_lib`, and registers it as a Jupyter kernel called `arena-env`. It's safe to re-run, e.g. after pulling updates that change `requirements.txt`.
+
+If you'd rather use your own environment (Python 3.12 or newer), run this from the `ARENA_materials` folder instead:
+
+```bash
+pip install -r requirements.txt
+pip install -e .
+```
+
+If a notebook stops with *"its Python environment isn't set up"*, it's running in an environment without `arena_lib` installed: run one of the above, then restart the kernel.
+
+**API keys**: put them in a `.env` file in the chapter's `exercises` folder (e.g. `chapter3_llm_evals/exercises/.env`), one per line, e.g. `OPENROUTER_API_KEY=...`. The [system requirements](/system-requirements/) page lists which keys each day needs.
 
 <details>
 <summary>Tips for MacOS</summary>
 
+- The install script swaps out CUDA-only packages (CPU `jax`, no `liger-kernel`), so GPU-heavy sections are slower or need a cloud GPU.
 - Set `device='mps'`
 - Enable CPU fallback: `PYTORCH_ENABLE_MPS_FALLBACK=1`
 - For DataLoaders, add `multiprocessing_context="fork"` to avoid memory crashes
@@ -407,8 +427,11 @@ After connecting to your VM, open the VS Code terminal (`Ctrl+Backtick` / `Cmd+B
 
 ```bash
 git clone https://github.com/ARENA-education/ARENA_materials.git
-bash ARENA_materials/install.sh
+bash ARENA_materials/install.sh                     # RunPod (logged in as root)
+bash ARENA_materials/install.sh --platform vastai   # VastAI, Lambda Labs (installs system packages with sudo)
 ```
+
+This creates a conda environment called `arena-env` (Python 3.13), installs everything in `requirements.txt`, and installs `arena_lib` (`pip install -e .`), which every notebook imports. It also clones [arena-llm-context](https://github.com/callummcdougall/arena-llm-context) next to the repo, extra context you can give an LLM to help with the exercises (skip it with `--no-llm-context`). API keys go in a `.env` file, as in [Local setup](#local-setup).
 
 Install the **Python** and **Jupyter** extensions (and optionally **Ruff** for autoformatting).
 
