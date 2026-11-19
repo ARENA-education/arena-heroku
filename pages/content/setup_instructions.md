@@ -93,7 +93,7 @@ The [system requirements](/system-requirements/) page lists, for each day, wheth
 If your machine meets the requirements, clone the repo and run its install script (on Windows, from Git Bash):
 
 ```bash
-git clone https://github.com/ARENA-education/ARENA_materials.git
+git clone --depth 1 https://github.com/ARENA-education/ARENA_materials.git
 cd ARENA_materials
 ./install_uv.sh --platform local
 source .venv/bin/activate  # Windows (Git Bash): source .venv/Scripts/activate
@@ -426,7 +426,7 @@ And there you go - you're all set!
 After connecting to your VM, open the VS Code terminal (`Ctrl+Backtick` / `Cmd+Backtick`) and run:
 
 ```bash
-git clone https://github.com/ARENA-education/ARENA_materials.git
+git clone --depth 1 https://github.com/ARENA-education/ARENA_materials.git
 bash ARENA_materials/install.sh                     # RunPod (logged in as root)
 bash ARENA_materials/install.sh --platform vastai   # VastAI, Lambda Labs (installs system packages with sudo)
 ```
