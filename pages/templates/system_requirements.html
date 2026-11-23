@@ -7,13 +7,13 @@
   <div class="static-page-content markdown-content sysreq-page">
     <h1>System Requirements</h1>
     <p>
-      What each day needs: GPU, runtime, whether it runs on free Colab, downloads, RAM and API keys. Click a row for
+      What each day needs: GPU, runtime, which Colab runtime it needs, downloads, RAM and API keys. Click a row for
       the details, which also appear at the start of each day. Runtimes leave out downloads and API calls; GPU times
       are on a 16 GB RTX A4000.
     </p>
     <p class="sysreq-legend">
       <span>GPU: ⬜ not needed · 🟩 optional · 🟨 recommended · 🟧 16 GiB card · 🟥 bigger; peak VRAM (with <code>LOW_GPU_MEM</code>); * skips a section that needs more</span>
-      <span>Colab: 🟢 runs · 🟡 partly · ❓ not tested yet · 🔴 doesn't run</span>
+      <span>Colab: 🟢 free (T4) · 🟡 Pro (L4) · 🔴 needs an A100 or G4 · ❓ not tested yet</span>
       <span>Download: ⬜ &lt;0.3 GB · 🟩 &lt;2 · 🟨 2–20 · 🟧 20–100 · 🟥 &gt;100 GB</span>
     </p>
     {% if groups %}
@@ -94,7 +94,7 @@
           var d = row.dataset;
           var ok = (!chap.value || body.dataset.chapter === chap.value)
             && (!gpu.value || (gpu.value === "cpu" ? (d.gpu === "none" || d.gpu === "optional") : d.gpu !== "big"))
-            && (!colab.checked || d.colab === "works" || d.colab === "partial")
+            && (!colab.checked || d.colab === "free" || d.colab === "works" || d.colab === "partial")
             && (!nokey.checked || d.paid === "0");
           row.hidden = !ok;
           if (!ok) { row.nextElementSibling.hidden = true; row.setAttribute("aria-expanded", "false"); }
