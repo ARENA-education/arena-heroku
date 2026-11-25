@@ -3022,12 +3022,13 @@ details.sysreq-card[open] .sysreq-card-title::before {
 }
 
 /* the legend: the bullet list in content/system_requirements.md */
-.sysreq-intro ul {
+.sysreq-intro > ul {
     list-style: none;
     padding-left: 0;
     font-size: 0.85rem;
     color: var(--color-text-secondary);
 }
+.sysreq-intro ul ul { list-style: disc; padding-left: 1.5rem; }
 
 .sysreq-filters {
     display: flex;
