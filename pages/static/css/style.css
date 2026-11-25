@@ -295,6 +295,18 @@ img {
     background: var(--color-bg-tertiary);
 }
 
+/* "Join Slack": outlined so it stands out from the page links */
+.nav-link.nav-link-slack {
+    color: var(--color-primary);
+    border: 1px solid var(--color-primary);
+    white-space: nowrap;
+}
+
+.nav-link.nav-link-slack:hover {
+    color: var(--color-primary-hover);
+    border-color: var(--color-primary-hover);
+}
+
 .nav-actions {
     display: flex;
     align-items: center;
