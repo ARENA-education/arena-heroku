@@ -690,7 +690,12 @@
 
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'arena_papers.zip';
+        const chapterId = String(currentChapter?.id || '')
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '_')
+            .replace(/^_+|_+$/g, '')
+            .slice(0, 80);
+        a.download = chapterId ? `arena_${chapterId}_papers.zip` : 'arena_papers.zip';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
