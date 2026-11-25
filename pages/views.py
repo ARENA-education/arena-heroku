@@ -774,6 +774,8 @@ def _inject_requirements(text: str, number: str | None) -> str:
 def system_requirements(request):
     """One table with every day's GPU, runtime, Colab, download, RAM and API-key requirements, grouped by chapter.
 
+    The heading, intro and legend above the table are content/system_requirements.md.
+
     The data comes from ARENA_materials' infrastructure/core/system_requirements.yaml, via the
     system_requirements.json its build workflow regenerates."""
     context = _get_context_base()
@@ -801,6 +803,7 @@ def system_requirements(request):
             )
         if rows:
             groups.append({"id": chapter["id"], "title": chapter.get("title", chapter["id"]), "rows": rows})
+    context["intro"] = _render_markdown(_read_local_content("system_requirements.md"))
     context["groups"] = groups
     context["day_count"] = sum(len(g["rows"]) for g in groups)
     return render(request, "system_requirements.html", context)

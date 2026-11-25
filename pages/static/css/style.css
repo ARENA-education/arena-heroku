@@ -3021,13 +3021,14 @@ details.sysreq-card[open] .sysreq-card-title::before {
     color: var(--color-text-secondary);
 }
 
-.sysreq-legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--spacing-xs) var(--spacing-lg);
+/* the legend: the bullet list in content/system_requirements.md */
+.sysreq-intro > ul {
+    list-style: none;
+    padding-left: 0;
     font-size: 0.85rem;
     color: var(--color-text-secondary);
 }
+.sysreq-intro ul ul { list-style: disc; padding-left: 1.5rem; }
 
 .sysreq-filters {
     display: flex;
@@ -3061,7 +3062,7 @@ details.sysreq-card[open] .sysreq-card-title::before {
 /* The table needs more room than a reading column; prose on the page keeps a readable width. */
 .static-page-container.sysreq-container { max-width: min(100%, 84rem); }
 .sysreq-container .markdown-content.sysreq-page { max-width: none; }
-.sysreq-page > p { max-width: 48rem; }
+.sysreq-intro p { max-width: 48rem; }
 
 .sysreq-wrap { overflow-x: auto; }
 .sysreq-page .sysreq-table { margin-top: 0; }

@@ -5,17 +5,9 @@
 {% block content %}
 <div class="static-page-container sysreq-container">
   <div class="static-page-content markdown-content sysreq-page">
-    <h1>System Requirements</h1>
-    <p>
-      What each day needs: GPU, runtime, which Colab runtime it needs, downloads, RAM and API keys. Click a row for
-      the details, which also appear at the start of each day. Runtimes leave out downloads and API calls; GPU times
-      are on a 16 GB RTX A4000.
-    </p>
-    <p class="sysreq-legend">
-      <span>GPU: ⬜ not needed · 🟩 optional · 🟨 recommended · 🟧 16 GiB card · 🟥 bigger; peak VRAM (with <code>LOW_GPU_MEM</code>); * skips a section that needs more</span>
-      <span>Colab: 🟩 free (T4) · 🟨 Pro recommended (slow on the free T4) · 🟧 needs Pro (L4) · 🟥 needs an A100 or G4 · ❓ not tested yet</span>
-      <span>Download: ⬜ &lt;0.3 GB · 🟩 &lt;2 · 🟨 2–20 · 🟧 20–100 · 🟥 &gt;100 GB</span>
-    </p>
+    <div class="sysreq-intro">
+      {{ intro|safe }}
+    </div>
     {% if groups %}
     <div class="sysreq-filters">
       <label>Chapter

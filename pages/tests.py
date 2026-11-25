@@ -619,3 +619,16 @@ class SystemRequirementsCardTests(SimpleTestCase):
             self.assertEqual(views._inject_requirements("# Introduction\n", "0.1"), "# Introduction\n")
         with mock.patch.object(views, "_system_requirements", return_value={"0.1": self.DAY}):
             self.assertEqual(views._inject_requirements("no intro here\n", "0.1"), "no intro here\n")
+
+
+@override_settings(STORAGES={"staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"}})
+class SystemRequirementsPageTests(SimpleTestCase):
+    def test_intro_comes_from_markdown(self):
+        with mock.patch.object(views, "_system_requirements", return_value={}):
+            resp = self.client.get("/system-requirements/")
+        self.assertEqual(resp.status_code, 200)
+        html = resp.content.decode()
+        self.assertIn("<h1", html)
+        self.assertIn('href="https://slop.sus.cat/infrastructure/gpu-availability/#"', html)
+        self.assertIn("<strong>We recommend", html)
+        self.assertNotIn("[here](", html)
