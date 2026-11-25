@@ -747,7 +747,13 @@ def _system_requirements() -> dict[str, dict]:
 
 def _requirements_list_md(day: dict) -> str:
     """The dropdown's bullet list, without its <details>/<summary> wrapper."""
-    return re.sub(r"</?details>|<summary>.*?</summary>", "", day["details_md"]).strip()
+    md = day["details_md"].strip()
+    # Only the outer wrapper goes: a nested dropdown inside it (the "Detailed API cost" table) is kept.
+    md = re.sub(r"\A<details>\s*<summary>.*?</summary>", "", md, count=1, flags=re.S)
+    md = re.sub(r"</details>\Z", "", md).strip()
+    # The build escapes prices as \$ (for Colab). KaTeX's auto-render does not unescape that, and would read two bare
+    # $ in one text node as maths, so each price's $ gets its own element.
+    return md.replace("\\$", "<span>&#36;</span>")
 
 
 def _inject_requirements(text: str, number: str | None) -> str:
@@ -772,7 +778,7 @@ def _inject_requirements(text: str, number: str | None) -> str:
 @require_GET
 @cache_control(public=True, max_age=3600)
 def system_requirements(request):
-    """One table with every day's GPU, runtime, Colab, download, RAM and API-key requirements, grouped by chapter.
+    """One table with every day's GPU, runtime, Colab, download, RAM, API-key and API-cost requirements, grouped by chapter.
 
     The heading, intro and legend above the table are content/system_requirements.md.
 

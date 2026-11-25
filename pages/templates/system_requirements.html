@@ -31,12 +31,12 @@
       <table class="sysreq-table">
         <thead>
           <tr>
-            <th>Day</th><th>🖥️ GPU</th><th>⏱️ GPU</th><th>⏱️ CPU</th><th>☁️ Colab</th><th>💾 Download</th><th>🐏 RAM</th><th>🔑 Keys</th>
+            <th>Day</th><th>🖥️ GPU</th><th>⏱️ GPU</th><th>⏱️ CPU</th><th>☁️ Colab</th><th>💾 Download</th><th>🐏 RAM</th><th>🔑 Keys</th><th>💵 API</th>
           </tr>
         </thead>
         {% for g in groups %}
         <tbody data-chapter="{{ g.id }}">
-          <tr class="sysreq-chap"><td colspan="8">{{ g.title }}</td></tr>
+          <tr class="sysreq-chap"><td colspan="9">{{ g.title }}</td></tr>
           {% for row in g.rows %}
           <tr class="sysreq-row" tabindex="0" aria-expanded="false"
               data-gpu="{{ row.gpu_level }}" data-colab="{{ row.colab }}" data-paid="{{ row.paid_keys|yesno:'1,0' }}">
@@ -48,8 +48,9 @@
             <td>{{ row.cells.download }}</td>
             <td class="sysreq-nw">{{ row.cells.ram|default:"–" }}</td>
             <td>{{ row.cells.keys }}</td>
+            <td class="sysreq-nw">{{ row.cells.api_cost|default:"–" }}</td>
           </tr>
-          <tr class="sysreq-details" hidden><td colspan="8">{{ row.details|safe }}</td></tr>
+          <tr class="sysreq-details" hidden><td colspan="9">{{ row.details|safe }}</td></tr>
           {% endfor %}
         </tbody>
         {% endfor %}
