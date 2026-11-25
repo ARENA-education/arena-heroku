@@ -614,6 +614,21 @@ class SystemRequirementsCardTests(SimpleTestCase):
         self.assertIn("🟧 16 GiB", out)
         self.assertEqual(out.count('class="sysreq-card"'), 1)
 
+    def test_nested_dropdown_is_kept_and_prices_are_not_maths(self):
+        day = {
+            "details_md": "<details>\n<summary>System Requirements</summary>\n\n- 💵 **API cost:** \\$0.06 to \\$0.09\n\n"
+            "<details>\n<summary>Detailed API cost</summary>\n\n| Section | Cost |\n|---|--:|\n| A | \\$0.01 |\n\n</details>\n\n</details>"
+        }
+        md = views._requirements_list_md(day)
+        self.assertNotIn("System Requirements", md)
+        self.assertEqual(md.count("<details>"), 1)
+        self.assertEqual(md.count("</details>"), 1)
+        self.assertIn("<summary>Detailed API cost</summary>", md)
+        self.assertNotIn("$", md)
+        out = views._render_markdown(md)
+        self.assertIn("<table>", out)
+        self.assertEqual(out.count("<span>&#36;</span>") + out.count("<span>$</span>"), 3)
+
     def test_no_card_without_data_or_intro(self):
         with mock.patch.object(views, "_system_requirements", return_value={}):
             self.assertEqual(views._inject_requirements("# Introduction\n", "0.1"), "# Introduction\n")
